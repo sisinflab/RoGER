@@ -1,1 +1,2 @@
 # EGCF-Rating
+To access the datasets, visit the following SharePoint link: [Datasets on SharePoint](https://politecnicobari-my.sharepoint.com/:f:/g/personal/claudio_pomo_poliba_it/EheHLjfdlhRIvX4mGr1VnLABE6GAavuyEaje6YV0gF4VJQ?e=ByGVwg)
