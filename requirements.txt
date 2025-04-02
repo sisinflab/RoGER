@@ -1,0 +1,14 @@
+hyperopt==0.2.7
+nltk==3.9.1
+numpy==2.2.4
+pandas==2.2.3
+Pillow==11.1.0
+PyYAML==6.0.2
+PyYAML==6.0.2
+scikit_learn==1.6.1
+scipy==1.15.2
+tensorflow==2.19.0
+torch==2.5.1+cu124
+torch_geometric==2.6.1
+torch_sparse==0.6.18+pt25cu124
+tqdm==4.67.1
