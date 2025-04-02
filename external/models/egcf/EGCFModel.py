@@ -78,7 +78,7 @@ class EGCFModel(torch.nn.Module, ABC):
             torch.nn.init.xavier_normal_(torch.empty((1, 1))))
         self.Mu.to(self.device)
 
-        self.edge_embeddings_interactions = torch.tensor(edge_features, dtype=torch.float32, device=self.device)
+        self.edge_embeddings_interactions = torch.tensor(edge_features, dtype=torch.float32, device=self.device).squeeze()
         self.edge_embeddings_interactions = torch.cat([self.edge_embeddings_interactions,
                                                        self.edge_embeddings_interactions], dim=0)
         self.feature_dim = edge_features.shape[1]

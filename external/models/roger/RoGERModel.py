@@ -3,6 +3,10 @@ from abc import ABC
 from torch_geometric.nn import GCNConv, GATConv
 from collections import OrderedDict
 
+#modifica aggiunta variabile ambiente per torch.use_deterministic
+import os
+os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"  # oppure ":16:8"
+
 import torch
 import torch_geometric
 import numpy as np
@@ -72,8 +76,10 @@ class RoGERModel(torch.nn.Module, ABC):
         self.aggr = aggr
         self.drop = drop
 
-        self.edge_embeddings_interactions = torch.tensor(edge_features, dtype=torch.float32, device=self.device)
-        self.feature_dim = edge_features.shape[1]
+        #modifica aggiunta squeeze()
+        self.edge_embeddings_interactions = torch.tensor(edge_features, dtype=torch.float32, device=self.device).squeeze()
+        #modifica shape[2] invece di shape[1]
+        self.feature_dim = edge_features.shape[2]
 
         # create node-node textual
         propagation_node_node_textual_list = []
