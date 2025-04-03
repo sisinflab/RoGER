@@ -58,11 +58,12 @@ class SVDppModel(keras.Model):
                                                           dtype=tf.float32)
         self.bias_ = tf.Variable(0., name='GB')
 
-        self.user_mf_embedding(0)
-        self.item_mf_embedding(0)
-        self.item_y_embedding(0)
-        self.user_bias_embedding(0)
-        self.item_bias_embedding(0)
+        #modifica: passaggio dell'argomento come tensore per evitare value error
+        self.user_mf_embedding(tf.constant(0))
+        self.item_mf_embedding(tf.constant(0))
+        self.item_y_embedding(tf.constant(0))
+        self.user_bias_embedding(tf.constant(0))
+        self.item_bias_embedding(tf.constant(0))
 
         self.loss = keras.losses.MeanSquaredError()
 

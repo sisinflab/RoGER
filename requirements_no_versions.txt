@@ -10,4 +10,5 @@ tensorflow
 torch
 torch_geometric
 torch_sparse
+torch_scatter
 tqdm
