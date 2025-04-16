@@ -135,6 +135,20 @@ class RoGER(RecMixin, BaseRecommenderModel):
                     t.update()
 
             self.evaluate(it, loss / (it + 1))
+            
+            #modifica gestione lr scheduler
+            val_metric_value = self._results[-1][0]["val_results"]["MSE"]
+            if val_metric_value is not None:
+                old_lr = self._model.optimizer.param_groups[0]['lr']
+                self._model.scheduler.step(val_metric_value)
+                new_lr = self._model.optimizer.param_groups[0]['lr']
+                if new_lr != old_lr:
+                    print(f"Epoch {it + 1}: Learning rate updated to {new_lr}")
+            else:
+                print("Validation metric value is None. Skipping scheduler step.")
+
+            
+
 
     def get_recommendations(self, k: int = 100):
         predictions_test = []

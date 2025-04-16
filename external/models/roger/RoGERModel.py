@@ -6,6 +6,8 @@ from collections import OrderedDict
 #modifica aggiunta variabile ambiente per torch.use_deterministic
 import os
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"  # oppure ":16:8"
+#aggiunta import scheduler
+from torch.optim.lr_scheduler import ReduceLROnPlateau
 
 import torch
 import torch_geometric
@@ -128,6 +130,13 @@ class RoGERModel(torch.nn.Module, ABC):
             self.attention.to(self.device)
 
         self.optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
+        
+        #modifica aggiunta scheduler lr
+        # mode='min' perché monitoriamo MSE (vogliamo minimizzarlo)
+        # factor=0.1 riduce LR a LR * 0.1
+        # patience=5 attende 5 epoche senza miglioramenti prima di ridurre LR
+        # verbose=True stampa un messaggio quando LR viene ridotto
+        self.scheduler = ReduceLROnPlateau(self.optimizer, mode='min', factor=0.1, patience=0, verbose=True)
 
         self.loss = torch.nn.MSELoss()
 
@@ -221,14 +230,14 @@ class RoGERModel(torch.nn.Module, ABC):
 
     def predict(self, gu, gi, users, items, **kwargs):
         rui = self.forward(inputs=(gu, gi,
-                                   self.Bu.weight[users], self.Bi.weight[items]))
+                        self.Bu.weight[users], self.Bi.weight[items]))
         return rui
 
     def train_step(self, batch):
         gu, gi = self.propagate_embeddings()
         user, item, r = batch
         rui = self.forward(inputs=(gu[user], gi[item],
-                                   self.Bu.weight[user], self.Bi.weight[item]))
+                        self.Bu.weight[user], self.Bi.weight[item]))
 
         loss = self.loss(torch.squeeze(rui), torch.tensor(r, device=self.device, dtype=torch.float))
 
