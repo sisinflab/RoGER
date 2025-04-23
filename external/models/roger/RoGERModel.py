@@ -3,11 +3,14 @@ from abc import ABC
 from torch_geometric.nn import GCNConv, GATConv
 from collections import OrderedDict
 
-#modifica aggiunta variabile ambiente per torch.use_deterministic
+# modifica aggiunta variabile ambiente per torch.use_deterministic
 import os
+
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"  # oppure ":16:8"
-#aggiunta import scheduler
+# aggiunta import scheduler
 from torch.optim.lr_scheduler import ReduceLROnPlateau
+# aggiunta import ContrastLoss
+from .ContrastLoss import ContrastLoss
 
 import torch
 import torch_geometric
@@ -18,22 +21,26 @@ from torch_sparse import SparseTensor
 
 
 class RoGERModel(torch.nn.Module, ABC):
-    def __init__(self,
-                 num_users,
-                 num_items,
-                 learning_rate,
-                 embed_k,
-                 n_layers,
-                 edge_features,
-                 edge_index,
-                 lm,
-                 aggr,
-                 drop,
-                 dense,
-                 random_seed,
-                 name="RoGER",
-                 **kwargs
-                 ):
+    def __init__(
+        self,
+        num_users,
+        num_items,
+        learning_rate,
+        embed_k,
+        n_layers,
+        edge_features,
+        edge_index,
+        lm,
+        aggr,
+        drop,
+        dense,
+        random_seed,
+        alpha,
+        factor,
+        patience,
+        name="RoGER",
+        **kwargs
+    ):
         super().__init__()
 
         # set seed
@@ -45,7 +52,7 @@ class RoGERModel(torch.nn.Module, ABC):
         torch.backends.cudnn.deterministic = True
         torch.use_deterministic_algorithms(True)
 
-        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.num_users = num_users
         self.num_items = num_items
@@ -53,14 +60,18 @@ class RoGERModel(torch.nn.Module, ABC):
         self.learning_rate = learning_rate
         self.n_layers = n_layers
 
-        self.L0 = torch.ones((edge_index.shape[1],), dtype=torch.float32, device=self.device)
+        self.L0 = torch.ones(
+            (edge_index.shape[1],), dtype=torch.float32, device=self.device
+        )
         self.edge_index = edge_index.to(self.device)
 
         self.Gu = torch.nn.Parameter(
-            torch.nn.init.xavier_uniform_(torch.empty((self.num_users, self.embed_k))))
+            torch.nn.init.xavier_uniform_(torch.empty((self.num_users, self.embed_k)))
+        )
         self.Gu.to(self.device)
         self.Gi = torch.nn.Parameter(
-            torch.nn.init.xavier_uniform_(torch.empty((self.num_items, self.embed_k))))
+            torch.nn.init.xavier_uniform_(torch.empty((self.num_items, self.embed_k)))
+        )
         self.Gi.to(self.device)
 
         self.Bu = torch.nn.Embedding(self.num_users, 1)
@@ -70,101 +81,149 @@ class RoGERModel(torch.nn.Module, ABC):
         torch.nn.init.xavier_normal_(self.Bi.weight)
         self.Bi.to(self.device)
 
-        self.Mu = torch.nn.Parameter(
-            torch.nn.init.xavier_normal_(torch.empty((1, 1))))
+        self.Mu = torch.nn.Parameter(torch.nn.init.xavier_normal_(torch.empty((1, 1))))
         self.Mu.to(self.device)
 
         self.lm = lm
         self.aggr = aggr
         self.drop = drop
+        self.alpha = alpha
+        self.factor = factor
+        self.patience = patience
 
-        #modifica aggiunta squeeze()
-        self.edge_embeddings_interactions = torch.tensor(edge_features, dtype=torch.float32, device=self.device).squeeze()
-        #modifica shape[2] invece di shape[1]
+        # modifica aggiunta squeeze()
+        self.edge_embeddings_interactions = torch.tensor(
+            edge_features, dtype=torch.float32, device=self.device
+        ).squeeze()
+        # modifica shape[2] invece di shape[1]
         self.feature_dim = edge_features.shape[2]
 
         # create node-node textual
         propagation_node_node_textual_list = []
         for _ in range(self.n_layers):
             propagation_node_node_textual_list.append(
-                (GCNConv(in_channels=self.embed_k,
-                         out_channels=self.embed_k,
-                         normalize=True,
-                         add_self_loops=False,
-                         bias=True), 'x, edge_index -> x'))
+                (
+                    GCNConv(
+                        in_channels=self.embed_k,
+                        out_channels=self.embed_k,
+                        normalize=True,
+                        add_self_loops=False,
+                        bias=True,
+                    ),
+                    "x, edge_index -> x",
+                )
+            )
 
-        self.node_node_textual_network = torch_geometric.nn.Sequential('x, edge_index',
-                                                                       propagation_node_node_textual_list)
+        self.node_node_textual_network = torch_geometric.nn.Sequential(
+            "x, edge_index", propagation_node_node_textual_list
+        )
         self.node_node_textual_network.to(self.device)
 
-        if self.aggr == 'sim':
+        if self.aggr == "sim":
             # projection
-            self.projection = torch.nn.Linear(self.edge_embeddings_interactions.shape[-1], self.embed_k)
+            self.projection = torch.nn.Linear(
+                self.edge_embeddings_interactions.shape[-1], self.embed_k
+            )
             self.projection.to(self.device)
 
-        elif self.aggr == 'nn':
+        elif self.aggr == "nn":
             self.dense_layer_size = [self.embed_k * 2 + self.feature_dim] + dense
             self.num_dense_layers = len(self.dense_layer_size)
             dense_network_list = []
             for idx, _ in enumerate(self.dense_layer_size[:-1]):
                 dense_network_list.append(
-                    ('dense_' + str(idx), torch.nn.Linear(in_features=self.dense_layer_size[idx],
-                                                          out_features=self.dense_layer_size[
-                                                              idx + 1],
-                                                          bias=True)))
-                dense_network_list.append(('drop_' + str(idx), torch.nn.Dropout(p=self.drop)))
-                dense_network_list.append(('relu_' + str(idx), torch.nn.ReLU()))
-            dense_network_list.append(('out', torch.nn.Linear(in_features=self.dense_layer_size[-1],
-                                                              out_features=1,
-                                                              bias=True)))
-            dense_network_list.append(('relu', torch.nn.ReLU()))
+                    (
+                        "dense_" + str(idx),
+                        torch.nn.Linear(
+                            in_features=self.dense_layer_size[idx],
+                            out_features=self.dense_layer_size[idx + 1],
+                            bias=True,
+                        ),
+                    )
+                )
+                dense_network_list.append(
+                    ("drop_" + str(idx), torch.nn.Dropout(p=self.drop))
+                )
+                dense_network_list.append(("relu_" + str(idx), torch.nn.ReLU()))
+            dense_network_list.append(
+                (
+                    "out",
+                    torch.nn.Linear(
+                        in_features=self.dense_layer_size[-1], out_features=1, bias=True
+                    ),
+                )
+            )
+            dense_network_list.append(("relu", torch.nn.ReLU()))
             self.dense_network = torch.nn.Sequential(OrderedDict(dense_network_list))
             self.dense_network.to(self.device)
         else:
-            self.attention = GATConv(in_channels=self.embed_k,
-                                     out_channels=self.embed_k,
-                                     concat=True,
-                                     edge_dim=self.feature_dim,
-                                     add_self_loops=False,
-                                     bias=True)
+            self.attention = GATConv(
+                in_channels=self.embed_k,
+                out_channels=self.embed_k,
+                concat=True,
+                edge_dim=self.feature_dim,
+                add_self_loops=False,
+                bias=True,
+            )
             self.attention.to(self.device)
 
         self.optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
-        
-        #modifica aggiunta scheduler lr
+
+        # modifica aggiunta scheduler lr
         # mode='min' perché monitoriamo MSE (vogliamo minimizzarlo)
         # factor=0.1 riduce LR a LR * 0.1
         # patience=5 attende 5 epoche senza miglioramenti prima di ridurre LR
         # verbose=True stampa un messaggio quando LR viene ridotto
-        self.scheduler = ReduceLROnPlateau(self.optimizer, mode='min', factor=0.1, patience=0, verbose=True)
+        self.scheduler = ReduceLROnPlateau(
+            self.optimizer, mode="min", factor=self.factor, patience=self.patience, verbose=True
+        )
 
-        self.loss = torch.nn.MSELoss()
+        self.mse_loss = torch.nn.MSELoss()
+        self.contrast_loss = ContrastLoss(feat_size=self.embed_k).to(self.device)
 
     def propagate_embeddings(self, evaluate=False):
-        all_embeddings = torch.cat((self.Gu.to(self.device), self.Gi.to(self.device)), 0)
+        all_embeddings = torch.cat(
+            (self.Gu.to(self.device), self.Gi.to(self.device)), 0
+        )
         for layer in range(self.n_layers):
             if evaluate:
-                if self.aggr == 'nn':
+                if self.aggr == "nn":
                     self.dense_network.eval()
                 with torch.no_grad():
                     updates = self.update_adjacency(all_embeddings)
-                    final_values = self.lm * self.L0.to(self.device) + (1 - self.lm) * updates
-                    edge_index = torch.stack([self.edge_index[0], self.edge_index[1], final_values], dim=0)
-                    all_embeddings = torch.relu(list(
-                        self.node_node_textual_network.children()
-                    )[layer](all_embeddings.to(self.device),
-                             self.edge_index_to_adj(edge_index).to(self.device)))
+                    final_values = (
+                        self.lm * self.L0.to(self.device) + (1 - self.lm) * updates
+                    )
+                    edge_index = torch.stack(
+                        [self.edge_index[0], self.edge_index[1], final_values], dim=0
+                    )
+                    all_embeddings = torch.relu(
+                        list(self.node_node_textual_network.children())[layer](
+                            all_embeddings.to(self.device),
+                            self.edge_index_to_adj(edge_index).to(self.device),
+                        )
+                    )
             else:
                 updates = self.update_adjacency(all_embeddings)
-                final_values = self.lm * self.L0.to(self.device) + (1 - self.lm) * updates
-                edge_index = torch.stack([self.edge_index[0], self.edge_index[1], final_values], dim=0)
-                all_embeddings = torch.relu(list(
-                    self.node_node_textual_network.children()
-                )[layer](torch.dropout(all_embeddings.to(self.device), p=self.drop, train=not evaluate),
-                         self.edge_index_to_adj(edge_index).to(self.device)))
+                final_values = (
+                    self.lm * self.L0.to(self.device) + (1 - self.lm) * updates
+                )
+                edge_index = torch.stack(
+                    [self.edge_index[0], self.edge_index[1], final_values], dim=0
+                )
+                all_embeddings = torch.relu(
+                    list(self.node_node_textual_network.children())[layer](
+                        torch.dropout(
+                            all_embeddings.to(self.device),
+                            p=self.drop,
+                            train=not evaluate,
+                        ),
+                        self.edge_index_to_adj(edge_index).to(self.device),
+                    )
+                )
 
         if evaluate:
-            if self.aggr == 'nn':
+            if self.aggr == "nn":
                 self.dense_network.train()
 
         gu, gi = torch.split(all_embeddings, [self.num_users, self.num_items], 0)
@@ -175,40 +234,62 @@ class RoGERModel(torch.nn.Module, ABC):
         cols = edge_index[1].long().to(self.device)
         values = edge_index[2].float().to(self.device)
 
-        return SparseTensor(row=rows,
-                            col=cols,
-                            value=values,
-                            sparse_sizes=(self.num_users + self.num_items,
-                                          self.num_users + self.num_items))
+        return SparseTensor(
+            row=rows,
+            col=cols,
+            value=values,
+            sparse_sizes=(
+                self.num_users + self.num_items,
+                self.num_users + self.num_items,
+            ),
+        )
 
     def update_adjacency(self, node_embeddings):
         row, col = self.edge_index
         row, col = row.long(), col.long()
-        row_nodes = node_embeddings[row[:row.shape[0] // 2]]
-        col_nodes = node_embeddings[row[:col.shape[0] // 2] - self.num_users]
+        row_nodes = node_embeddings[row[: row.shape[0] // 2]]
+        col_nodes = node_embeddings[row[: col.shape[0] // 2] - self.num_users]
 
-        if self.aggr == 'sim':
-            user_item = torch.relu(torch.nn.functional.cosine_similarity(
-                torch.mul(row_nodes, self.projection(self.edge_embeddings_interactions)),
-                torch.mul(col_nodes, self.projection(self.edge_embeddings_interactions))
-            ))
+        if self.aggr == "sim":
+            user_item = torch.relu(
+                torch.nn.functional.cosine_similarity(
+                    torch.mul(
+                        row_nodes, self.projection(self.edge_embeddings_interactions)
+                    ),
+                    torch.mul(
+                        col_nodes, self.projection(self.edge_embeddings_interactions)
+                    ),
+                )
+            )
             updates = torch.concat([user_item, user_item], dim=0)
             return updates
 
-        elif self.aggr == 'nn':
-            user_item = torch.squeeze(self.dense_network(torch.concat(
-                [row_nodes, self.edge_embeddings_interactions, col_nodes], dim=-1)))
+        elif self.aggr == "nn":
+            user_item = torch.squeeze(
+                self.dense_network(
+                    torch.concat(
+                        [row_nodes, self.edge_embeddings_interactions, col_nodes],
+                        dim=-1,
+                    )
+                )
+            )
             updates = torch.concat([user_item, user_item], dim=0)
             return updates
 
         else:
-            edge_index = self.edge_index[:, :self.edge_index.shape[1] // 2].clone()
-            edge_index = torch.concat([edge_index.to(self.device), torch.ones((1, edge_index.shape[1]), device=self.device)])
+            edge_index = self.edge_index[:, : self.edge_index.shape[1] // 2].clone()
+            edge_index = torch.concat(
+                [
+                    edge_index.to(self.device),
+                    torch.ones((1, edge_index.shape[1]), device=self.device),
+                ]
+            )
             _, user_item = self.attention(
                 node_embeddings,
                 self.edge_index_to_adj(edge_index),
                 self.edge_embeddings_interactions,
-                return_attention_weights=True)
+                return_attention_weights=True,
+            )
             user_item = torch.squeeze(user_item.coo()[2])
             updates = torch.concat([user_item, user_item], dim=0)
             return updates
@@ -229,20 +310,52 @@ class RoGERModel(torch.nn.Module, ABC):
         return xui
 
     def predict(self, gu, gi, users, items, **kwargs):
-        rui = self.forward(inputs=(gu, gi,
-                        self.Bu.weight[users], self.Bi.weight[items]))
+        rui = self.forward(
+            inputs=(gu, gi, self.Bu.weight[users], self.Bi.weight[items])
+        )
         return rui
 
-    def train_step(self, batch):
-        gu, gi = self.propagate_embeddings()
-        user, item, r = batch
-        rui = self.forward(inputs=(gu[user], gi[item],
-                        self.Bu.weight[user], self.Bi.weight[item]))
+    #    def train_step(self, batch):
+    #        gu, gi = self.propagate_embeddings()
+    #        user, item, r = batch
+    #        rui = self.forward(inputs=(gu[user], gi[item],
+    #                        self.Bu.weight[user], self.Bi.weight[item]))
+    #
+    #        loss = self.loss(torch.squeeze(rui), torch.tensor(r, device=self.device, dtype=torch.float))
+    #
+    #        self.optimizer.zero_grad()
+    #        loss.backward()
+    #        self.optimizer.step()
+    #
+    #        return loss.detach().cpu().numpy()
 
-        loss = self.loss(torch.squeeze(rui), torch.tensor(r, device=self.device, dtype=torch.float))
+    # modifica train_step con l'aggiunta di una contrastive loss
+    def train_step(self, batch):
+        #generazione delle due view
+        gu1, gi1 = self.propagate_embeddings()
+        gu2, gi2 = self.propagate_embeddings()
+        
+        user, item, r = batch
+        
+        # calcolo della mse loss per la prima view
+        rui = self.forward(
+            inputs=(gu1[user], gi1[item], self.Bu.weight[user], self.Bi.weight[item])
+        )
+
+        mse_loss = self.mse_loss(
+            torch.squeeze(rui), torch.tensor(r, device=self.device, dtype=torch.float)
+        )
+        
+        # calcolo della contrastive loss
+        user_nd_loss = self.contrast_loss(gu1, gu2).mean()
+        item_nd_loss = self.contrast_loss(gi1, gi2).mean()
+        nd_loss = (user_nd_loss + item_nd_loss) / 2.0
+        #print(f"\ncontrastive loss: {nd_loss} | mse loss: {mse_loss}\n")
+        
+        total_loss = mse_loss + self.alpha * nd_loss
 
         self.optimizer.zero_grad()
-        loss.backward()
+        total_loss.backward()
         self.optimizer.step()
 
-        return loss.detach().cpu().numpy()
+        return total_loss.detach().cpu().numpy()

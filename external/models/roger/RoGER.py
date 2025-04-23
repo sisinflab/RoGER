@@ -33,7 +33,10 @@ class RoGER(RecMixin, BaseRecommenderModel):
             ("_aggr", "aggr", "aggr", 'sim', str, None),
             ("_dense", "dense", "dense", "(32,16,8)", lambda x: list(make_tuple(x)),
              lambda x: self._batch_remove(str(x), " []").replace(",", "-")),
-            ("_loader", "loader", "loader", 'InteractionsTextualAttributes', str, None)
+            ("_loader", "loader", "loader", 'InteractionsTextualAttributes', str, None),
+            ("_alpha", "alpha", "nda", 0.01, float, None),
+            ("_factor", "factor", "fct", 0.1, float, None),
+            ("_patience", "patience", "ptn", 0, int, None)
         ]
         self.autoset_params()
 
@@ -95,7 +98,10 @@ class RoGER(RecMixin, BaseRecommenderModel):
             aggr=self._aggr,
             drop=self._drop,
             dense=self._dense,
-            random_seed=self._seed
+            random_seed=self._seed,
+            alpha=self._alpha,
+            factor=self._factor,
+            patience=self._patience
         )
 
     @property
