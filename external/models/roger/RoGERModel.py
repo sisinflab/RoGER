@@ -248,7 +248,7 @@ class RoGERModel(torch.nn.Module, ABC):
         row, col = self.edge_index
         row, col = row.long(), col.long()
         row_nodes = node_embeddings[row[: row.shape[0] // 2]]
-        col_nodes = node_embeddings[row[: col.shape[0] // 2] - self.num_users]
+        col_nodes = node_embeddings[col[: col.shape[0] // 2]]
 
         if self.aggr == "sim":
             user_item = torch.relu(
