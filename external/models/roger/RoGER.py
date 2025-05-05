@@ -159,7 +159,9 @@ class RoGER(RecMixin, BaseRecommenderModel):
     def get_recommendations(self, k: int = 100):
         predictions_test = []
         predictions_val = []
-        gu, gi = self._model.propagate_embeddings()
+        gu, gi = self._model.propagate_embeddings(evaluate=True)
+        # gu = self._model.Gu
+        # gi = self._model.Gi
         val_len = len(self.df_val_rat)
         with tqdm(total=int(val_len // self._batch_eval), disable=not self._verbose) as t:
             for index, offset in enumerate(range(0, val_len, self._batch_eval)):

@@ -153,7 +153,7 @@ class RoGERModel(torch.nn.Module, ABC):
                     ),
                 )
             )
-            dense_network_list.append(("relu", torch.nn.ReLU()))
+            dense_network_list.append(("sigmoid", torch.nn.Sigmoid()))
             self.dense_network = torch.nn.Sequential(OrderedDict(dense_network_list))
             self.dense_network.to(self.device)
         else:
