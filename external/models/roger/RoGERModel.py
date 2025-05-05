@@ -181,7 +181,7 @@ class RoGERModel(torch.nn.Module, ABC):
         self.mse_loss = torch.nn.MSELoss()
         self.contrast_loss = ContrastLoss(feat_size=self.embed_k).to(self.device)
 
-    def propagate_embeddings(self, evaluate=False):
+    def propagate_embeddings(self, mask_user=None, mask_item=None, evaluate=False):
         all_embeddings = torch.cat(
             (self.Gu.to(self.device), self.Gi.to(self.device)), 0
         )
@@ -190,7 +190,7 @@ class RoGERModel(torch.nn.Module, ABC):
                 if self.aggr == "nn":
                     self.dense_network.eval()
                 with torch.no_grad():
-                    updates = self.update_adjacency(all_embeddings)
+                    updates = self.update_adjacency(all_embeddings, evaluate=evaluate)
                     final_values = (
                         self.lm * self.L0.to(self.device) + (1 - self.lm) * updates
                     )
@@ -204,12 +204,12 @@ class RoGERModel(torch.nn.Module, ABC):
                         )
                     )
             else:
-                updates = self.update_adjacency(all_embeddings)
+                updates = self.update_adjacency(all_embeddings, mask_user, mask_item)
                 final_values = (
-                    self.lm * self.L0.to(self.device) + (1 - self.lm) * updates
+                    self.lm * self.L0[np.concatenate((mask_user,mask_item)) & np.concatenate((mask_item, mask_user))].to(self.device) + (1 - self.lm) * updates
                 )
                 edge_index = torch.stack(
-                    [self.edge_index[0], self.edge_index[1], final_values], dim=0
+                    [self.edge_index[0, np.concatenate((mask_user,mask_item)) & np.concatenate((mask_item, mask_user))], self.edge_index[1, np.concatenate((mask_user,mask_item)) & np.concatenate((mask_item, mask_user))], final_values], dim=0
                 )
                 all_embeddings = torch.relu(
                     list(self.node_node_textual_network.children())[layer](
@@ -244,8 +244,14 @@ class RoGERModel(torch.nn.Module, ABC):
             ),
         )
 
-    def update_adjacency(self, node_embeddings):
-        row, col = self.edge_index
+    def update_adjacency(self, node_embeddings, mask_user=None, mask_item=None, evaluate=False):
+        if evaluate==False:
+            edge_embeddings_interactions = self.edge_embeddings_interactions[mask_user & mask_item, :]
+            row, col = self.edge_index[:, np.concatenate((mask_user,mask_item)) & np.concatenate((mask_item, mask_user))]
+        else:
+            edge_embeddings_interactions = self.edge_embeddings_interactions
+            row, col = self.edge_index
+        
         row, col = row.long(), col.long()
         row_nodes = node_embeddings[row[: row.shape[0] // 2]]
         col_nodes = node_embeddings[col[: col.shape[0] // 2]]
@@ -254,10 +260,10 @@ class RoGERModel(torch.nn.Module, ABC):
             user_item = torch.relu(
                 torch.nn.functional.cosine_similarity(
                     torch.mul(
-                        row_nodes, self.projection(self.edge_embeddings_interactions)
+                        row_nodes, self.projection(edge_embeddings_interactions)
                     ),
                     torch.mul(
-                        col_nodes, self.projection(self.edge_embeddings_interactions)
+                        col_nodes, self.projection(edge_embeddings_interactions)
                     ),
                 )
             )
@@ -268,7 +274,7 @@ class RoGERModel(torch.nn.Module, ABC):
             user_item = torch.squeeze(
                 self.dense_network(
                     torch.concat(
-                        [row_nodes, self.edge_embeddings_interactions, col_nodes],
+                        [row_nodes, edge_embeddings_interactions, col_nodes],
                         dim=-1,
                     )
                 )
@@ -287,7 +293,7 @@ class RoGERModel(torch.nn.Module, ABC):
             _, user_item = self.attention(
                 node_embeddings,
                 self.edge_index_to_adj(edge_index),
-                self.edge_embeddings_interactions,
+                edge_embeddings_interactions,
                 return_attention_weights=True,
             )
             user_item = torch.squeeze(user_item.coo()[2])
@@ -330,10 +336,10 @@ class RoGERModel(torch.nn.Module, ABC):
     #        return loss.detach().cpu().numpy()
 
     # modifica train_step con l'aggiunta di una contrastive loss
-    def train_step(self, batch):
+    def train_step(self, batch, mask):
         #generazione delle due view
-        gu1, gi1 = self.propagate_embeddings()
-        gu2, gi2 = self.propagate_embeddings()
+        gu1, gi1 = self.propagate_embeddings(mask_user=mask[0], mask_item=mask[1])
+        gu2, gi2 = self.propagate_embeddings(mask_user=mask[2], mask_item=mask[3])
         
         user, item, r = batch
         

@@ -132,11 +132,14 @@ class RoGER(RecMixin, BaseRecommenderModel):
 
             np.random.shuffle(edge_index)
             edge_index = edge_index.astype(int)
+            
+            mask_user_1, mask_item_1 = self.create_adj_mat(edge_index)
+            mask_user_2, mask_item_2 = self.create_adj_mat(edge_index)
 
             with tqdm(total=int(self._data.transactions // self._batch_size), disable=not self._verbose) as t:
                 for batch in self._sampler.step(edge_index):
                     steps += 1
-                    loss += self._model.train_step(batch)
+                    loss += self._model.train_step(batch, mask=[mask_user_1, mask_item_1 , mask_user_2, mask_item_2] )
                     t.set_postfix({'loss': f'{loss / steps:.5f}'})
                     t.update()
 
@@ -154,7 +157,13 @@ class RoGER(RecMixin, BaseRecommenderModel):
                 print("Validation metric value is None. Skipping scheduler step.")
 
             
-
+    def create_adj_mat(self, edge_index):
+        users_to_drop = random.sample(self._data.users, round(self._data.num_users * 0.2))
+        items_to_drop = random.sample(self._data.items, round(self._data.num_items * 0.2))
+        mask_user = ~np.isin(edge_index[:, 0], list(users_to_drop))
+        mask_item = ~np.isin(edge_index[:, 1], list(items_to_drop))
+    
+        return mask_user, mask_item
 
     def get_recommendations(self, k: int = 100):
         predictions_test = []
