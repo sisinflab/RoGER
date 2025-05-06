@@ -167,7 +167,7 @@ class RoGERModel(torch.nn.Module, ABC):
             )
             self.attention.to(self.device)
 
-        self.optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate)
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate, weight_decay=1e-4)
 
         # modifica aggiunta scheduler lr
         # mode='min' perché monitoriamo MSE (vogliamo minimizzarlo)
@@ -346,6 +346,9 @@ class RoGERModel(torch.nn.Module, ABC):
         gu1, gi1 = self.propagate_embeddings(mask_user=mask[0], mask_item=mask[1])
         gu2, gi2 = self.propagate_embeddings(mask_user=mask[2], mask_item=mask[3])
         
+        gu1, gi1 = torch.nn.functional.normalize(gu1, dim=1), torch.nn.functional.normalize(gi1, dim=1)
+        gu2, gi2 = torch.nn.functional.normalize(gu2, dim=1), torch.nn.functional.normalize(gi2, dim=1)
+        
         user, item, r = batch
         
         # calcolo della mse loss per la prima view
@@ -368,15 +371,16 @@ class RoGERModel(torch.nn.Module, ABC):
         self.optimizer.zero_grad()
         total_loss.backward()
 
-        # --- Debug: Calcolo della somma delle magnitudini L2 dei gradienti per il batch corrente ---
-        batch_gradient_norm_sum = 0.0
-        for p in self.parameters():
+        # --- Debug: Calcolo della norma L2 dei gradienti per parametro per il batch corrente ---
+        batch_gradient_norms = {}
+        for name, p in self.named_parameters():
             if p.grad is not None:
-                batch_gradient_norm_sum += p.grad.data.norm(2).item()
+                batch_gradient_norms[name] = p.grad.data.norm(2).item()
         # --- Fine Debug ---
+
 
         self.optimizer.step()
 
         # Restituisce la loss e la somma delle magnitudini dei gradienti per questo batch
         # La media a livello di epoca dovrà essere calcolata nel loop di training esterno
-        return total_loss.detach().cpu().numpy(), batch_gradient_norm_sum
+        return total_loss.detach().cpu().numpy(), batch_gradient_norms, mse_loss, nd_loss

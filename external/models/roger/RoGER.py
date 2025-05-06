@@ -131,6 +131,9 @@ class RoGER(RecMixin, BaseRecommenderModel):
             loss = 0
             steps = 0
             grad_norm = 0
+            mse_loss = 0
+            nd_loss = 0
+            grad_norm = {}
 
             np.random.shuffle(edge_index)
             edge_index = edge_index.astype(int)
@@ -142,13 +145,28 @@ class RoGER(RecMixin, BaseRecommenderModel):
                 for batch in self._sampler.step(edge_index):
                     steps += 1
                     # loss += self._model.train_step(batch, mask=[mask_user_1, mask_item_1 , mask_user_2, mask_item_2] )
-                    loss_t, grad_norm_t= self._model.train_step(batch, mask=[mask_user_1, mask_item_1 , mask_user_2, mask_item_2] )
+                    loss_t, grad_norm_dict, mse_loss_t, nd_loss_t = self._model.train_step(batch, mask=[mask_user_1, mask_item_1 , mask_user_2, mask_item_2] )
                     loss += loss_t
-                    grad_norm += grad_norm_t
+                    if isinstance(grad_norm_dict, dict):
+                        for key, value in grad_norm_dict.items():
+                            grad_norm[key] = grad_norm_dict.get(key, 0.0) + value
+                    # else:
+                        # Optionally, handle the case where grad_norm_dict is not a dictionary,
+                        # for example, if train_step might return a scalar or None for grad_norm.
+                        # If grad_norm_dict is guaranteed to be a dict, this else is not needed.
+                        # Example: if grad_norm_dict is a scalar and grad_norm is not a dict (still 0)
+                        # elif isinstance(grad_norm_dict, (int, float)) and not isinstance(grad_norm, dict):
+                        #    grad_norm += grad_norm_dict
+                    mse_loss += mse_loss_t
+                    nd_loss += nd_loss_t
                     t.set_postfix({'loss': f'{loss / steps:.5f}'})
                     t.update()
-
-            self.logger.info(f"Epoch {it + 1}: Grad Norm: {grad_norm / steps:.5f}")
+                    
+            if isinstance(grad_norm, dict) and steps > 0:
+                for key in grad_norm:
+                    grad_norm[key] /= steps
+            self.logger.info(f"Epoch {it + 1}: {grad_norm}")
+            self.logger.info(f"Epoch {it + 1}: Loss: {loss / steps:.5f} - MSE Loss: {mse_loss / steps:.5f} - ND Loss: {nd_loss / steps:.5f}")
             self.evaluate(it, loss / (it + 1))
             
             #modifica gestione lr scheduler
