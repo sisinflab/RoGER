@@ -36,7 +36,8 @@ class RoGER(RecMixin, BaseRecommenderModel):
             ("_loader", "loader", "loader", 'InteractionsTextualAttributes', str, None),
             ("_alpha", "alpha", "nda", 0.01, float, None),
             ("_factor", "factor", "fct", 0.1, float, None),
-            ("_patience", "patience", "ptn", 0, int, None)
+            ("_patience", "patience", "ptn", 0, int, None),
+            ("_node_dropout", "node_dropout", "nd", 0.1, float, None)
         ]
         self.autoset_params()
 
@@ -129,20 +130,25 @@ class RoGER(RecMixin, BaseRecommenderModel):
         for it in self.iterate(self._epochs):
             loss = 0
             steps = 0
+            grad_norm = 0
 
             np.random.shuffle(edge_index)
             edge_index = edge_index.astype(int)
             
-            mask_user_1, mask_item_1 = self.create_adj_mat(edge_index)
-            mask_user_2, mask_item_2 = self.create_adj_mat(edge_index)
+            mask_user_1, mask_item_1 = self.create_adj_mask(edge_index)
+            mask_user_2, mask_item_2 = self.create_adj_mask(edge_index)
 
             with tqdm(total=int(self._data.transactions // self._batch_size), disable=not self._verbose) as t:
                 for batch in self._sampler.step(edge_index):
                     steps += 1
-                    loss += self._model.train_step(batch, mask=[mask_user_1, mask_item_1 , mask_user_2, mask_item_2] )
+                    # loss += self._model.train_step(batch, mask=[mask_user_1, mask_item_1 , mask_user_2, mask_item_2] )
+                    loss_t, grad_norm_t= self._model.train_step(batch, mask=[mask_user_1, mask_item_1 , mask_user_2, mask_item_2] )
+                    loss += loss_t
+                    grad_norm += grad_norm_t
                     t.set_postfix({'loss': f'{loss / steps:.5f}'})
                     t.update()
 
+            self.logger.info(f"Epoch {it + 1}: Grad Norm: {grad_norm / steps:.5f}")
             self.evaluate(it, loss / (it + 1))
             
             #modifica gestione lr scheduler
@@ -152,14 +158,13 @@ class RoGER(RecMixin, BaseRecommenderModel):
                 self._model.scheduler.step(val_metric_value)
                 new_lr = self._model.optimizer.param_groups[0]['lr']
                 if new_lr != old_lr:
-                    print(f"Epoch {it + 1}: Learning rate updated to {new_lr}")
+                    self.logger.info(f"Epoch {it + 1}: Learning rate reduced from {old_lr:.8f} to {new_lr:.8f} based on {self._validation_metric}: {val_metric_value:.5f}")
             else:
-                print("Validation metric value is None. Skipping scheduler step.")
-
+                self.logger.warning(f"Epoch {it + 1}: Validation metric '{self._validation_metric}' is None. Skipping scheduler step.")
             
-    def create_adj_mat(self, edge_index):
-        users_to_drop = random.sample(self._data.users, round(self._data.num_users * 0.2))
-        items_to_drop = random.sample(self._data.items, round(self._data.num_items * 0.2))
+    def create_adj_mask(self, edge_index):
+        users_to_drop = random.sample(self._data.users, round(self._data.num_users * self._node_dropout))
+        items_to_drop = random.sample(self._data.items, round(self._data.num_items * self._node_dropout))
         mask_user = ~np.isin(edge_index[:, 0], list(users_to_drop))
         mask_item = ~np.isin(edge_index[:, 1], list(items_to_drop))
     

@@ -175,7 +175,7 @@ class RoGERModel(torch.nn.Module, ABC):
         # patience=5 attende 5 epoche senza miglioramenti prima di ridurre LR
         # verbose=True stampa un messaggio quando LR viene ridotto
         self.scheduler = ReduceLROnPlateau(
-            self.optimizer, mode="min", factor=self.factor, patience=self.patience, verbose=True
+            self.optimizer, mode="min", factor=self.factor, patience=self.patience
         )
 
         self.mse_loss = torch.nn.MSELoss()
@@ -337,6 +337,11 @@ class RoGERModel(torch.nn.Module, ABC):
 
     # modifica train_step con l'aggiunta di una contrastive loss
     def train_step(self, batch, mask):
+        # Create boolean masks full of True values with the same shape as mask[0] and mask[1]
+        mask_all_true_user = np.full(mask[0].shape, True, dtype=bool)
+        mask_all_true_item = np.full(mask[1].shape, True, dtype=bool)
+        # Pass the all-True masks to propagate_embeddings
+        gu, gi = self.propagate_embeddings(mask_user=mask_all_true_user, mask_item=mask_all_true_item)
         #generazione delle due view
         gu1, gi1 = self.propagate_embeddings(mask_user=mask[0], mask_item=mask[1])
         gu2, gi2 = self.propagate_embeddings(mask_user=mask[2], mask_item=mask[3])
@@ -345,7 +350,7 @@ class RoGERModel(torch.nn.Module, ABC):
         
         # calcolo della mse loss per la prima view
         rui = self.forward(
-            inputs=(gu1[user], gi1[item], self.Bu.weight[user], self.Bi.weight[item])
+            inputs=(gu[user], gi[item], self.Bu.weight[user], self.Bi.weight[item])
         )
 
         mse_loss = self.mse_loss(
@@ -362,6 +367,16 @@ class RoGERModel(torch.nn.Module, ABC):
 
         self.optimizer.zero_grad()
         total_loss.backward()
+
+        # --- Debug: Calcolo della somma delle magnitudini L2 dei gradienti per il batch corrente ---
+        batch_gradient_norm_sum = 0.0
+        for p in self.parameters():
+            if p.grad is not None:
+                batch_gradient_norm_sum += p.grad.data.norm(2).item()
+        # --- Fine Debug ---
+
         self.optimizer.step()
 
-        return total_loss.detach().cpu().numpy()
+        # Restituisce la loss e la somma delle magnitudini dei gradienti per questo batch
+        # La media a livello di epoca dovrà essere calcolata nel loop di training esterno
+        return total_loss.detach().cpu().numpy(), batch_gradient_norm_sum
