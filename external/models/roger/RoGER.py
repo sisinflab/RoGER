@@ -5,6 +5,7 @@ import random
 import pandas as pd
 from ast import literal_eval as make_tuple
 from torch_geometric.utils import degree
+from torch.utils.tensorboard import SummaryWriter
 
 from .pointwise_pos_neg_sampler import Sampler
 
@@ -12,7 +13,7 @@ from elliot.recommender import BaseRecommenderModel
 from elliot.recommender.base_recommender_model import init_charger
 from elliot.recommender.recommender_utils_mixin import RecMixin
 from .RoGERModel import RoGERModel
-
+from datetime import datetime
 
 class RoGER(RecMixin, BaseRecommenderModel):
     r"""
@@ -40,6 +41,8 @@ class RoGER(RecMixin, BaseRecommenderModel):
             ("_node_dropout", "node_dropout", "nd", 0.1, float, None)
         ]
         self.autoset_params()
+
+        self.writer = SummaryWriter(log_dir=f'C:/Users/Antonio/Documents/RoGER/log/runs/{datetime.now().strftime("%Y_%m_%d_%H_%M_%S")}/')
 
         np.random.seed(self._seed)
         random.seed(self._seed)
@@ -166,7 +169,13 @@ class RoGER(RecMixin, BaseRecommenderModel):
                 for key in grad_norm:
                     grad_norm[key] /= steps
             self.logger.info(f"Epoch {it + 1}: {grad_norm}")
+            # Itera su ogni chiave-valore nel dizionario grad_norm
+            for key, value in grad_norm.items():
+                self.writer.add_scalar(f'GradNorm/{key}', value, it)
             self.logger.info(f"Epoch {it + 1}: Loss: {loss / steps:.5f} - MSE Loss: {mse_loss / steps:.5f} - ND Loss: {nd_loss / steps:.5f}")
+            self.writer.add_scalar('Tot_Loss', loss/steps, it)
+            self.writer.add_scalar('MSE_Loss', mse_loss/steps, it)
+            self.writer.add_scalar('ND_Loss', nd_loss/steps, it)
             self.evaluate(it, loss / (it + 1))
             
             #modifica gestione lr scheduler
@@ -179,7 +188,12 @@ class RoGER(RecMixin, BaseRecommenderModel):
                     self.logger.info(f"Epoch {it + 1}: Learning rate reduced from {old_lr:.8f} to {new_lr:.8f} based on {self._validation_metric}: {val_metric_value:.5f}")
             else:
                 self.logger.warning(f"Epoch {it + 1}: Validation metric '{self._validation_metric}' is None. Skipping scheduler step.")
-            
+            self.writer.add_scalar('LR', self._model.optimizer.param_groups[0]['lr'], it)
+            self.writer.add_scalar('MSE_val', val_metric_value, it)
+            self.writer.add_scalar('MSE_test', self._results[-1][0]["test_results"]["MSE"], it)
+            self.writer.flush()
+        self.writer.close()
+
     def create_adj_mask(self, edge_index):
         users_to_drop = random.sample(self._data.users, round(self._data.num_users * self._node_dropout))
         items_to_drop = random.sample(self._data.items, round(self._data.num_items * self._node_dropout))

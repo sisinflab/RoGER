@@ -12,3 +12,4 @@ torch_geometric
 torch_sparse
 torch_scatter
 tqdm
+tensorboard
