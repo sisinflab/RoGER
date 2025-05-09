@@ -42,7 +42,7 @@ class RoGER(RecMixin, BaseRecommenderModel):
         ]
         self.autoset_params()
 
-        self.writer = SummaryWriter(log_dir=f'C:/Users/Antonio/Documents/RoGER/log/runs/{datetime.now().strftime("%Y_%m_%d_%H_%M_%S")}/')
+        self.writer = SummaryWriter(log_dir=f'./log/runs/{datetime.now().strftime("%Y_%m_%d_%H_%M_%S")}/')
 
         np.random.seed(self._seed)
         random.seed(self._seed)
