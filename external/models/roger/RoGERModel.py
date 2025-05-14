@@ -38,6 +38,7 @@ class RoGERModel(torch.nn.Module, ABC):
         alpha,
         factor,
         patience,
+        weight_decay,
         name="RoGER",
         **kwargs
     ):
@@ -59,6 +60,7 @@ class RoGERModel(torch.nn.Module, ABC):
         self.embed_k = embed_k
         self.learning_rate = learning_rate
         self.n_layers = n_layers
+        self.weight_decay = weight_decay
 
         self.L0 = torch.ones(
             (edge_index.shape[1],), dtype=torch.float32, device=self.device
@@ -167,7 +169,7 @@ class RoGERModel(torch.nn.Module, ABC):
             )
             self.attention.to(self.device)
 
-        self.optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate, weight_decay=1e-4)
+        self.optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
 
         # modifica aggiunta scheduler lr
         # mode='min' perché monitoriamo MSE (vogliamo minimizzarlo)
@@ -361,8 +363,8 @@ class RoGERModel(torch.nn.Module, ABC):
         )
         
         # calcolo della contrastive loss
-        user_nd_loss = self.contrast_loss(gu1, gu2).mean()
-        item_nd_loss = self.contrast_loss(gi1, gi2).mean()
+        user_nd_loss = self.contrast_loss(gu1[user], gu2[user]).mean()
+        item_nd_loss = self.contrast_loss(gi1[item], gi2[item]).mean()
         nd_loss = (user_nd_loss + item_nd_loss) / 2.0
         #print(f"\ncontrastive loss: {nd_loss} | mse loss: {mse_loss}\n")
         

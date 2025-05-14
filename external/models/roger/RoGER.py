@@ -27,18 +27,19 @@ class RoGER(RecMixin, BaseRecommenderModel):
         self._params_list = [
             ("_lr", "lr", "lr", 0.0005, float, None),
             ("_emb", "emb", "emb", 64, int, None),
-            ("_batch_eval", "batch_eval", "batch_eval", 512, int, None),
-            ("_n_layers", "n_layers", "n_layers", 3, int, None),
-            ("_lambda", "lambda", "lambda", 0.1, float, None),
+            ("_batch_eval", "batch_eval", "bch_ev", 512, int, None),
+            ("_n_layers", "n_layers", "n_ly", 3, int, None),
+            ("_lambda", "lambda", "lmd", 0.1, float, None),
             ("_drop", "drop", "drop", 0.1, float, None),
             ("_aggr", "aggr", "aggr", 'sim', str, None),
             ("_dense", "dense", "dense", "(32,16,8)", lambda x: list(make_tuple(x)),
              lambda x: self._batch_remove(str(x), " []").replace(",", "-")),
-            ("_loader", "loader", "loader", 'InteractionsTextualAttributes', str, None),
+            ("_loader", "loader", "load", 'InteractionsTextualAttributes', str, None),
             ("_alpha", "alpha", "nda", 0.01, float, None),
             ("_factor", "factor", "fct", 0.1, float, None),
             ("_patience", "patience", "ptn", 0, int, None),
-            ("_node_dropout", "node_dropout", "nd", 0.1, float, None)
+            ("_node_dropout", "node_dropout", "nd", 0.1, float, None),
+            ("_weight_decay", "weight_decay", "wd", 1e-4, float, None)
         ]
         self.autoset_params()
 
@@ -105,7 +106,8 @@ class RoGER(RecMixin, BaseRecommenderModel):
             random_seed=self._seed,
             alpha=self._alpha,
             factor=self._factor,
-            patience=self._patience
+            patience=self._patience,
+            weight_decay=self._weight_decay
         )
 
     @property
@@ -171,13 +173,13 @@ class RoGER(RecMixin, BaseRecommenderModel):
             self.logger.info(f"Epoch {it + 1}: {grad_norm}")
             # Itera su ogni chiave-valore nel dizionario grad_norm
             for key, value in grad_norm.items():
-                self.writer.add_scalar(f'GradNorm/{key}', value, it)
+                self.writer.add_histogram(f'GradNorm/{key}', value, it)
             self.logger.info(f"Epoch {it + 1}: Loss: {loss / steps:.5f} - MSE Loss: {mse_loss / steps:.5f} - ND Loss: {nd_loss / steps:.5f}")
             self.writer.add_scalar('Tot_Loss', loss/steps, it)
             self.writer.add_scalar('MSE_Loss', mse_loss/steps, it)
             self.writer.add_scalar('ND_Loss', nd_loss/steps, it)
             self.evaluate(it, loss / (it + 1))
-            
+
             #modifica gestione lr scheduler
             val_metric_value = self._results[-1][0]["val_results"]["MSE"]
             if val_metric_value is not None:
