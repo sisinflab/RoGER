@@ -375,9 +375,11 @@ class RoGERModel(torch.nn.Module, ABC):
 
         # --- Debug: Calcolo della norma L2 dei gradienti per parametro per il batch corrente ---
         batch_gradient_norms = {}
+        batch_weight_distributions = {}
         for name, p in self.named_parameters():
             if p.grad is not None:
                 batch_gradient_norms[name] = p.grad.data.norm(2).item()
+            batch_weight_distributions[name] = p.data.detach().cpu().numpy()
         # --- Fine Debug ---
 
 
@@ -385,4 +387,4 @@ class RoGERModel(torch.nn.Module, ABC):
 
         # Restituisce la loss e la somma delle magnitudini dei gradienti per questo batch
         # La media a livello di epoca dovrà essere calcolata nel loop di training esterno
-        return total_loss.detach().cpu().numpy(), batch_gradient_norms, mse_loss, nd_loss
+        return total_loss.detach().cpu().numpy(), batch_gradient_norms, batch_weight_distributions, mse_loss, nd_loss

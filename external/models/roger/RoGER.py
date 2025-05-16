@@ -139,6 +139,7 @@ class RoGER(RecMixin, BaseRecommenderModel):
             mse_loss = 0
             nd_loss = 0
             grad_norm = {}
+            weight_distributions = {}
 
             np.random.shuffle(edge_index)
             edge_index = edge_index.astype(int)
@@ -150,11 +151,21 @@ class RoGER(RecMixin, BaseRecommenderModel):
                 for batch in self._sampler.step(edge_index):
                     steps += 1
                     # loss += self._model.train_step(batch, mask=[mask_user_1, mask_item_1 , mask_user_2, mask_item_2] )
-                    loss_t, grad_norm_dict, mse_loss_t, nd_loss_t = self._model.train_step(batch, mask=[mask_user_1, mask_item_1 , mask_user_2, mask_item_2] )
+                    loss_t, grad_norm_dict, weight_distributions_dict, mse_loss_t, nd_loss_t = self._model.train_step(batch, mask=[mask_user_1, mask_item_1 , mask_user_2, mask_item_2] )
                     loss += loss_t
                     if isinstance(grad_norm_dict, dict):
                         for key, value in grad_norm_dict.items():
-                            grad_norm[key] = grad_norm_dict.get(key, 0.0) + value
+                            #grad_norm[key] = grad_norm_dict.get(key, 0.0) + value
+                            if key not in grad_norm:
+                                grad_norm[key] = np.array([value])  # Inizializza un nuovo array con il primo valore
+                            else:
+                                grad_norm[key] = np.append(grad_norm[key],value)  # Aggiungi il valore all'array esistente
+                    if isinstance(weight_distributions_dict, dict):
+                        for key, value in weight_distributions_dict.items():
+                            if key not in weight_distributions:
+                                weight_distributions[key] = np.array([value])  # Inizializza un nuovo array con il primo valore
+                            else:
+                                weight_distributions[key] = np.append(weight_distributions[key],value)  # Aggiungi il valore all'array esistente
                     # else:
                         # Optionally, handle the case where grad_norm_dict is not a dictionary,
                         # for example, if train_step might return a scalar or None for grad_norm.
@@ -167,13 +178,15 @@ class RoGER(RecMixin, BaseRecommenderModel):
                     t.set_postfix({'loss': f'{loss / steps:.5f}'})
                     t.update()
                     
-            if isinstance(grad_norm, dict) and steps > 0:
-                for key in grad_norm:
-                    grad_norm[key] /= steps
-            self.logger.info(f"Epoch {it + 1}: {grad_norm}")
+            #if isinstance(grad_norm, dict) and steps > 0:
+            #    for key in grad_norm:
+            #        grad_norm[key] /= steps
+            #self.logger.info(f"Epoch {it + 1}: {grad_norm}")
             # Itera su ogni chiave-valore nel dizionario grad_norm
             for key, value in grad_norm.items():
                 self.writer.add_histogram(f'GradNorm/{key}', value, it)
+            for key, value in weight_distributions.items():
+                self.writer.add_histogram(f'WeightDistribution/{key}', value, it)
             self.logger.info(f"Epoch {it + 1}: Loss: {loss / steps:.5f} - MSE Loss: {mse_loss / steps:.5f} - ND Loss: {nd_loss / steps:.5f}")
             self.writer.add_scalar('Tot_Loss', loss/steps, it)
             self.writer.add_scalar('MSE_Loss', mse_loss/steps, it)
