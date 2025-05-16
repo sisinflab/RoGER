@@ -35,14 +35,17 @@ class RoGER(RecMixin, BaseRecommenderModel):
             ("_dense", "dense", "dense", "(32,16,8)", lambda x: list(make_tuple(x)),
              lambda x: self._batch_remove(str(x), " []").replace(",", "-")),
             ("_loader", "loader", "load", 'InteractionsTextualAttributes', str, None),
+            ("_loader", "loader", "load", 'InteractionsTextualAttributes', str, None),
             ("_alpha", "alpha", "nda", 0.01, float, None),
             ("_factor", "factor", "fct", 0.1, float, None),
             ("_patience", "patience", "ptn", 0, int, None),
             ("_node_dropout", "node_dropout", "nd", 0.1, float, None),
-            ("_weight_decay", "weight_decay", "wd", 1e-4, float, None)
+            ("_ssl_temperature", "ssl_temperature", "temp", 0.1, float, None),
+            ("_weight_decay", "weight_decay", "wd", 0.0, float, None),
         ]
         self.autoset_params()
 
+        self.writer = SummaryWriter(log_dir=f'./log/runs/{datetime.now().strftime("%Y_%m_%d_%H_%M_%S")}/')
         self.writer = SummaryWriter(log_dir=f'./log/runs/{datetime.now().strftime("%Y_%m_%d_%H_%M_%S")}/')
 
         np.random.seed(self._seed)
@@ -107,7 +110,8 @@ class RoGER(RecMixin, BaseRecommenderModel):
             alpha=self._alpha,
             factor=self._factor,
             patience=self._patience,
-            weight_decay=self._weight_decay
+            ssl_temp=self._ssl_temperature,
+            weight_decay=self._weight_decay,
         )
 
     @property

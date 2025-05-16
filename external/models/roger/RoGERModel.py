@@ -38,6 +38,7 @@ class RoGERModel(torch.nn.Module, ABC):
         alpha,
         factor,
         patience,
+        ssl_temp,
         weight_decay,
         name="RoGER",
         **kwargs
@@ -60,7 +61,7 @@ class RoGERModel(torch.nn.Module, ABC):
         self.embed_k = embed_k
         self.learning_rate = learning_rate
         self.n_layers = n_layers
-        self.weight_decay = weight_decay
+        self.ssl_temp = ssl_temp
 
         self.L0 = torch.ones(
             (edge_index.shape[1],), dtype=torch.float32, device=self.device
@@ -92,6 +93,7 @@ class RoGERModel(torch.nn.Module, ABC):
         self.alpha = alpha
         self.factor = factor
         self.patience = patience
+        self.weight_decay = weight_decay
 
         # modifica aggiunta squeeze()
         self.edge_embeddings_interactions = torch.tensor(
@@ -322,6 +324,17 @@ class RoGERModel(torch.nn.Module, ABC):
             inputs=(gu, gi, self.Bu.weight[users], self.Bi.weight[items])
         )
         return rui
+    
+
+    # forward usato per la contrastive loss di SGL
+    def forward_contrastive(self, inputs, **kwargs):
+        gu, gi = inputs
+        gamma_u = torch.squeeze(gu).to(self.device)
+        gamma_i = torch.squeeze(gi).to(self.device)
+
+        xui = torch.sum(gamma_u * gamma_i, 1)
+
+        return xui
 
     #    def train_step(self, batch):
     #        gu, gi = self.propagate_embeddings()
@@ -337,6 +350,31 @@ class RoGERModel(torch.nn.Module, ABC):
     #
     #        return loss.detach().cpu().numpy()
 
+
+    # Metodo per calcolare la contrastive loss con infoNCE "generica"
+    def infonce_loss(self, z1, z2):
+        # z1, z2: [batch_size, embed_dim]
+        batch_size = z1.size(0)
+        z1 = torch.nn.functional.normalize(z1, dim=1)
+        z2 = torch.nn.functional.normalize(z2, dim=1)
+        representations = torch.cat([z1, z2], dim=0)  # [2*B, D]
+
+        # Similarity matrix
+        sim_matrix = torch.matmul(representations, representations.T) / self.ssl_temp
+
+        # Mask self-similarity
+        mask = torch.eye(2 * batch_size, device=z1.device).bool()
+        sim_matrix = sim_matrix.masked_fill(mask, float('-inf'))
+
+        # Positive pairs: i-th in z1 with i-th in z2 (and viceversa)
+        labels = torch.arange(batch_size, device=z1.device)
+        labels = torch.cat([labels + batch_size, labels], dim=0)
+
+        loss = torch.nn.functional.cross_entropy(sim_matrix, labels)
+        return loss
+
+
+
     # modifica train_step con l'aggiunta di una contrastive loss
     def train_step(self, batch, mask):
         # Create boolean masks full of True values with the same shape as mask[0] and mask[1]
@@ -348,9 +386,6 @@ class RoGERModel(torch.nn.Module, ABC):
         gu1, gi1 = self.propagate_embeddings(mask_user=mask[0], mask_item=mask[1])
         gu2, gi2 = self.propagate_embeddings(mask_user=mask[2], mask_item=mask[3])
         
-        gu1, gi1 = torch.nn.functional.normalize(gu1, dim=1), torch.nn.functional.normalize(gi1, dim=1)
-        gu2, gi2 = torch.nn.functional.normalize(gu2, dim=1), torch.nn.functional.normalize(gi2, dim=1)
-        
         user, item, r = batch
         
         # calcolo della mse loss per la prima view
@@ -361,7 +396,26 @@ class RoGERModel(torch.nn.Module, ABC):
         mse_loss = self.mse_loss(
             torch.squeeze(rui), torch.tensor(r, device=self.device, dtype=torch.float)
         )
-        
+        ''' SGL style contrastive loss
+        pos_ratings_user = self.forward_contrastive(inputs=(gu1[user], gu2[user]))
+        pos_ratings_item = self.forward_contrastive(inputs=(gi1[item], gi2[item]))
+
+        tot_ratings_user = torch.matmul(gu1[user],
+                                        torch.transpose(gu2, 0, 1))
+        tot_ratings_item = torch.matmul(gi1[item],
+                                        torch.transpose(gi2, 0, 1))
+
+        ssl_logits_user = tot_ratings_user - pos_ratings_user[:, None]
+        ssl_logits_item = tot_ratings_item - pos_ratings_item[:, None]
+        clogits_user = torch.logsumexp(ssl_logits_user / self.ssl_temp, dim=1)
+        clogits_item = torch.logsumexp(ssl_logits_item / self.ssl_temp, dim=1)
+        nd_loss = torch.sum(clogits_user + clogits_item)
+        '''
+        ''' InfoNCE style contrastive loss
+        user_nd_loss = self.infonce_loss(gu1[user], gu2[user])
+        item_nd_loss = self.infonce_loss(gi1[item], gi2[item])
+        '''
+
         # calcolo della contrastive loss
         user_nd_loss = self.contrast_loss(gu1[user], gu2[user]).mean()
         item_nd_loss = self.contrast_loss(gi1[item], gi2[item]).mean()
