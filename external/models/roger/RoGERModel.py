@@ -253,6 +253,8 @@ class RoGERModel(torch.nn.Module, ABC):
         else:
             edge_embeddings_interactions = self.edge_embeddings_interactions
             row, col = self.edge_index
+            mask_user = np.full(edge_embeddings_interactions.shape[0], True, dtype=bool)
+            mask_item = np.full(edge_embeddings_interactions.shape[0], True, dtype=bool)
         
         row, col = row.long(), col.long()
         row_nodes = node_embeddings[row[: row.shape[0] // 2]]
@@ -286,6 +288,7 @@ class RoGERModel(torch.nn.Module, ABC):
 
         else:
             edge_index = self.edge_index[:, : self.edge_index.shape[1] // 2].clone()
+            edge_index = edge_index[:, mask_user & mask_item]
             edge_index = torch.concat(
                 [
                     edge_index.to(self.device),
