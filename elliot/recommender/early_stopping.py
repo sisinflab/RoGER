@@ -89,7 +89,7 @@ class EarlyStopping:
                     else:
                         check.append(False)
                     if self.verbose:
-                        self.logger.info(f"Analyzed pair: ({round(candidate_best, 5)}, {round(p, 5)}): {check[-1]}")
+                        self.logger.info(f"Analyzed pair: ({round(candidate_best, 10)}, {round(p, 10)}): {check[-1]}")
                 if self.verbose:
                     self.logger.info(f"Check List: {check}")
                 if check and all(check):

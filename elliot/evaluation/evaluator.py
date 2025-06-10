@@ -104,10 +104,10 @@ class Evaluator(object):
         self.logger.info("")
         self.logger.info(f"Validation Evaluation results")
         self.logger.info(f"Results")
-        self.logger.info(f"MSE: {val_results:.4f}")
+        self.logger.info(f"MSE: {val_results:.16f}")
         self.logger.info(f"Test Evaluation results")
         self.logger.info(f"Results")
-        self.logger.info(f"MSE: {test_results:.4f}")
+        self.logger.info(f"MSE: {test_results:.16f}")
 
         result_dict = {0: {"val_results": {'MSE': val_results},
                            "val_statistical_results": [],
