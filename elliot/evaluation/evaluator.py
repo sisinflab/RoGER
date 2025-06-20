@@ -33,7 +33,7 @@ from . import metrics
 from . import popularity_utils
 from . import relevance
 
-from sklearn.metrics import mean_squared_error
+from sklearn.metrics import mean_squared_error, roc_auc_score
 
 
 class Evaluator(object):
@@ -107,11 +107,33 @@ class Evaluator(object):
         self.logger.info(f"MSE: {val_results:.16f}")
         self.logger.info(f"Test Evaluation results")
         self.logger.info(f"Results")
-        self.logger.info(f"MSE: {test_results:.16f}")
+        self.logger.info(f"MSE: {test_results:.4f}")
 
         result_dict = {0: {"val_results": {'MSE': val_results},
                            "val_statistical_results": [],
                            "test_results": {'MSE': test_results},
+                           "test_statistical_results": []}}
+        return result_dict
+    
+    def eval_auc(self, val_pred, val_true, test_pred, test_true):
+        """
+        Runtime Evaluation of Recommendation Performance
+        :return:
+        """
+        val_results = roc_auc_score(val_true, val_pred)
+        test_results = roc_auc_score(test_true, test_pred)
+
+        self.logger.info("")
+        self.logger.info(f"Validation Evaluation results")
+        self.logger.info(f"Results")
+        self.logger.info(f"AUC: {val_results:.4f}")
+        self.logger.info(f"Test Evaluation results")
+        self.logger.info(f"Results")
+        self.logger.info(f"AUC: {test_results:.4f}")
+
+        result_dict = {0: {"val_results": {'AUC': val_results},
+                           "val_statistical_results": [],
+                           "test_results": {'AUC': test_results},
                            "test_statistical_results": []}}
         return result_dict
 

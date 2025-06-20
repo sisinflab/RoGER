@@ -221,8 +221,6 @@ class RoGER(RecMixin, BaseRecommenderModel):
         predictions_test = []
         predictions_val = []
         gu, gi = self._model.propagate_embeddings(evaluate=True)
-        # gu = self._model.Gu
-        # gi = self._model.Gi
         val_len = len(self.df_val_rat)
         with tqdm(total=int(val_len // self._batch_eval), disable=not self._verbose) as t:
             for index, offset in enumerate(range(0, val_len, self._batch_eval)):
@@ -255,6 +253,13 @@ class RoGER(RecMixin, BaseRecommenderModel):
             true_val, true_test = self.df_val_rat['rating'].to_numpy(), self.df_test_rat['rating'].to_numpy()
             result_dict = self.evaluator.eval_error(np.array(predictions_val), true_val, np.array(predictions_test),
                                                     true_test)
+    
+            predictions_val = (np.array(predictions_val) >= 4).astype(int)
+            predictions_test = (np.array(predictions_test) >= 4).astype(int)
+            true_val = (true_val >= 4).astype(int)
+            true_test = (true_test >= 4).astype(int)
+
+            result_dict_prova = self.evaluator.eval_auc(predictions_val, true_val, predictions_test, true_test)
 
             self._losses.append(loss)
 

@@ -210,6 +210,7 @@ class RoGERModel(torch.nn.Module, ABC):
                 final_values = (
                     self.lm * self.L0[np.concatenate((mask_user,mask_item)) & np.concatenate((mask_item, mask_user))].to(self.device) + (1 - self.lm) * updates
                 )
+                final_values = (final_values >= 0.7).int()
                 edge_index = torch.stack(
                     [self.edge_index[0, np.concatenate((mask_user,mask_item)) & np.concatenate((mask_item, mask_user))], self.edge_index[1, np.concatenate((mask_user,mask_item)) & np.concatenate((mask_item, mask_user))], final_values], dim=0
                 )
