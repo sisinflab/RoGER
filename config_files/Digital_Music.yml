@@ -29,12 +29,12 @@ experiment:
         restore: False
       epochs: 50
       batch_size: 128
-      n_layers: 3
+      n_layers: [choice, [1, 2, 3, 4]]
       emb: 16
       lr: [qloguniform, -9.2, -4.6, 1e-3]
       seed: 123
       lambda: [quniform, 0.0, 1.0, 1e-1]
-      drop: 0.5
+      drop: [quniform, 0.0, 1.0, 1e-1]
       dense: (32,16,8)
       aggr: [choice, [nn, att, sim]]
       alpha: [quniform, 0.01, 0.5, 0.01]
@@ -42,3 +42,9 @@ experiment:
       patience: 2
       nd: 0.1
       weight_decay: [qloguniform, -13.8, -4.6, 1e-5]
+      early_stopping:
+        patience: 5
+        mode: min
+        monitor: MSE
+        verbose: True
+        min_delta: 0.0001
