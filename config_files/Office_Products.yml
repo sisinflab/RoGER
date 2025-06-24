@@ -12,7 +12,7 @@ experiment:
   dataset: Office_Products
   top_k: 20
   evaluation:
-    cutoffs: [20]
+    cutoffs: [0]
     simple_metrics: [Recall, MSE, AUC]
   gpu: 0
   external_models_path: ../external/models/__init__.py
