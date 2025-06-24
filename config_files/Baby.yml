@@ -19,7 +19,7 @@ experiment:
   models:
     external.RoGER:
       meta:
-        hyper_max_evals: 150
+        hyper_max_evals: 20
         hyper_opt_alg: tpe
         verbose: True
         save_weights: False
@@ -31,7 +31,7 @@ experiment:
       batch_size: 128
       n_layers: [choice, [1, 2, 3, 4]]
       emb: 16
-      lr: [qloguniform, -9.2, -4.6, 1e-3]
+      lr: [loguniform, -9.2, -4.6]
       seed: 123
       lambda: [quniform, 0.0, 1.0, 1e-1]
       drop: [quniform, 0.0, 1.0, 1e-1]
