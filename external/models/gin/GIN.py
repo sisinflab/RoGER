@@ -17,7 +17,7 @@ from .pointwise_pos_neg_sampler import Sampler
 from elliot.recommender import BaseRecommenderModel
 from elliot.recommender.base_recommender_model import init_charger
 from elliot.recommender.recommender_utils_mixin import RecMixin
-from .GINModel import GCNModel
+from .GINModel import GINModel
 from ast import literal_eval as make_tuple
 
 from torch_sparse import SparseTensor
