@@ -16,14 +16,18 @@ from .RoGERModel import RoGERModel
 from datetime import datetime
 
 class RoGER(RecMixin, BaseRecommenderModel):
-    r"""
+    """
     Reviews on Graph Edges for Recommendation
     """
 
     @init_charger
     def __init__(self, data, config, params, *args, **kwargs):
-
-        ######################################
+        """
+        Initialize the RoGER recommender.
+        Loads parameters, prepares dataframes for validation and test,
+        sets up the sampler and model.
+        """
+        # Parameter list for automatic configuration
         self._params_list = [
             ("_lr", "lr", "lr", 0.0005, float, None),
             ("_emb", "emb", "emb", 64, int, None),
@@ -43,13 +47,16 @@ class RoGER(RecMixin, BaseRecommenderModel):
         ]
         self.autoset_params()
 
+        # TensorBoard writer for logging
         self.writer = SummaryWriter(log_dir=f'./log/runs/{datetime.now().strftime("%Y_%m_%d_%H_%M_%S")}/')
 
         np.random.seed(self._seed)
         random.seed(self._seed)
 
+        # Sampler for training batches
         self._sampler = Sampler(self._batch_size, self._data.transactions)
 
+        # Prepare validation and test dataframes
         self.df_val_rat = pd.DataFrame(columns=['user', 'item', 'rating'])
         self.df_test_rat = pd.DataFrame(columns=['user', 'item', 'rating'])
 
@@ -68,9 +75,11 @@ class RoGER(RecMixin, BaseRecommenderModel):
                                               pd.DataFrame({'user': k, 'item': int(kk), 'rating': vv}, index=[idx])])
                 idx += 1
 
+        # Ensure correct types
         self.df_val_rat = self.df_val_rat.astype({'user': int, 'item': int, 'rating': float})
         self.df_test_rat = self.df_test_rat.astype({'user': int, 'item': int, 'rating': float})
 
+        # Map public user/item IDs
         self.df_val_rat['user'] = self.df_val_rat['user'].map(data.public_users)
         self.df_val_rat['item'] = self.df_val_rat['item'].map(data.public_items)
         self.df_test_rat['user'] = self.df_test_rat['user'].map(data.public_users)
@@ -82,15 +91,17 @@ class RoGER(RecMixin, BaseRecommenderModel):
         self.df_val_rat = self.df_val_rat[self.df_val_rat['item'] <= self._num_items - 1]
         self.df_test_rat = self.df_test_rat[self.df_test_rat['item'] <= self._num_items - 1]
 
+        # Load edge textual features
         self._side_edge_textual = self._data.side_information.InteractionsTextualAttributes
 
+        # Build edge index for the graph
         row, col = data.sp_i_train.nonzero()
         col = [c + self._num_users for c in col]
         edge_index = torch.tensor(np.array([list(row) + col, col + list(row)]))
-        # edge_index = self.norm(edge_index)
 
         edge_features = self._side_edge_textual.object.get_all_features()
 
+        # Initialize the RoGER model
         self._model = RoGERModel(
             num_users=self._num_users,
             num_items=self._num_items,
@@ -112,11 +123,17 @@ class RoGER(RecMixin, BaseRecommenderModel):
 
     @property
     def name(self):
+        """
+        Returns the model name with parameter shortcuts.
+        """
         return "RoGER" \
                + f"_{self.get_base_params_shortcut()}" \
                + f"_{self.get_params_shortcut()}"
 
     def norm(self, edge_index):
+        """
+        Normalize edge weights for GCN propagation.
+        """
         row, col = edge_index
         deg = degree(col, self._num_users + self._num_items)
         deg_inv_sqrt = deg.pow(-0.5)
@@ -125,6 +142,10 @@ class RoGER(RecMixin, BaseRecommenderModel):
         return torch.stack([row, col, norm], dim=0)
 
     def train(self):
+        """
+        Main training loop for RoGER.
+        Handles batching, loss computation, logging, and learning rate scheduling.
+        """
         if self._restore:
             return self.restore_weights()
 
@@ -141,25 +162,28 @@ class RoGER(RecMixin, BaseRecommenderModel):
             grad_norm = {}
             weight_distributions = {}
 
+            # Shuffle edge index for each epoch
             np.random.shuffle(edge_index)
             edge_index = edge_index.astype(int)
             
+            # Create dropout masks for contrastive views
             mask_user_1, mask_item_1 = self.create_adj_mask(edge_index)
             mask_user_2, mask_item_2 = self.create_adj_mask(edge_index)
 
             with tqdm(total=int(self._data.transactions // self._batch_size), disable=not self._verbose) as t:
                 for batch in self._sampler.step(edge_index):
                     steps += 1
-                    # loss += self._model.train_step(batch, mask=[mask_user_1, mask_item_1 , mask_user_2, mask_item_2] )
+                    # Training step returns loss and gradient statistics
                     loss_t, grad_norm_dict, weight_distributions_dict, mse_loss_t, nd_loss_t = self._model.train_step(batch, mask=[mask_user_1, mask_item_1 , mask_user_2, mask_item_2] )
                     loss += loss_t
+                    # Aggregate gradient norms
                     if isinstance(grad_norm_dict, dict):
                         for key, value in grad_norm_dict.items():
-                            #grad_norm[key] = grad_norm_dict.get(key, 0.0) + value
                             if key not in grad_norm:
-                                grad_norm[key] = np.array([value])  # Inizializza un nuovo array con il primo valore
+                                grad_norm[key] = np.array([value])
                             else:
-                                grad_norm[key] = np.append(grad_norm[key],value)  # Aggiungi il valore all'array esistente
+                                grad_norm[key] = np.append(grad_norm[key],value)
+                    # Aggregate weight distributions
                     if isinstance(weight_distributions_dict, dict):
                         for key, value in weight_distributions_dict.items():
                             if key not in weight_distributions:
@@ -182,7 +206,7 @@ class RoGER(RecMixin, BaseRecommenderModel):
             #    for key in grad_norm:
             #        grad_norm[key] /= steps
             #self.logger.info(f"Epoch {it + 1}: {grad_norm}")
-            # Itera su ogni chiave-valore nel dizionario grad_norm
+            # Log gradient norms and weight distributions to TensorBoard
             for key, value in grad_norm.items():
                 self.writer.add_histogram(f'GradNorm/{key}', value, it)
             for key, value in weight_distributions.items():
@@ -193,7 +217,7 @@ class RoGER(RecMixin, BaseRecommenderModel):
             self.writer.add_scalar('ND_Loss', nd_loss/steps, it)
             self.evaluate(it, loss / (it + 1))
 
-            #modifica gestione lr scheduler
+            # Learning rate scheduler step based on validation metric
             val_metric_value = self._results[-1][0]["val_results"]["MSE"]
             if val_metric_value is not None:
                 old_lr = self._model.optimizer.param_groups[0]['lr']
@@ -210,6 +234,9 @@ class RoGER(RecMixin, BaseRecommenderModel):
         self.writer.close()
 
     def create_adj_mask(self, edge_index):
+        """
+        Create dropout masks for users and items for contrastive learning.
+        """
         users_to_drop = random.sample(self._data.users, round(self._data.num_users * self._node_dropout))
         items_to_drop = random.sample(self._data.items, round(self._data.num_items * self._node_dropout))
         mask_user = ~np.isin(edge_index[:, 0], list(users_to_drop))
@@ -218,6 +245,9 @@ class RoGER(RecMixin, BaseRecommenderModel):
         return mask_user, mask_item
 
     def get_recommendations(self, k: int = 100):
+        """
+        Generate recommendations for validation and test sets.
+        """
         predictions_test = []
         predictions_val = []
         gu, gi = self._model.propagate_embeddings(evaluate=True)
@@ -242,12 +272,19 @@ class RoGER(RecMixin, BaseRecommenderModel):
         return predictions_val, predictions_test
 
     def get_single_recommendation(self, mask, k, predictions, offset, offset_stop):
+        """
+        Get top-k recommendations for a single batch of users.
+        """
         v, i = self._model.get_top_k(predictions, mask[offset: offset_stop], k=k)
         items_ratings_pair = [list(zip(map(self._data.private_items.get, u_list[0]), u_list[1]))
                               for u_list in list(zip(i.detach().cpu().numpy(), v.detach().cpu().numpy()))]
         return dict(zip(map(self._data.private_users.get, range(offset, offset_stop)), items_ratings_pair))
 
     def evaluate(self, it=None, loss=0.0):
+        """
+        Evaluate the model on validation and test sets.
+        Logs metrics and saves the best model if needed.
+        """
         if (it is None) or (not (it + 1) % self._validation_rate):
             predictions_val, predictions_test = self.get_recommendations()
             true_val, true_test = self.df_val_rat['rating'].to_numpy(), self.df_test_rat['rating'].to_numpy()
@@ -285,12 +322,18 @@ class RoGER(RecMixin, BaseRecommenderModel):
                         self.logger.warning("Saving weights FAILED. No model to save.")
 
     def get_loss(self):
+        """
+        Returns the best loss value for optimization.
+        """
         if self._optimize_internal_loss:
             return min(self._losses)
         else:
             return min([r[0]["val_results"][self._validation_metric] for r in self._results])
 
     def get_best_arg(self):
+        """
+        Returns the index of the best epoch according to the validation metric.
+        """
         if self._optimize_internal_loss:
             val_results = np.argmin(self._losses)
         else:
@@ -298,6 +341,9 @@ class RoGER(RecMixin, BaseRecommenderModel):
         return val_results
 
     def restore_weights(self):
+        """
+        Restore model and optimizer weights from a checkpoint file.
+        """
         try:
             checkpoint = torch.load(self._saving_filepath)
             self._model.load_state_dict(checkpoint['model_state_dict'])

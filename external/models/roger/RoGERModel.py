@@ -2,14 +2,10 @@ from abc import ABC
 
 from torch_geometric.nn import GCNConv, GATConv
 from collections import OrderedDict
-
-# modifica aggiunta variabile ambiente per torch.use_deterministic
 import os
 
-os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"  # oppure ":16:8"
-# aggiunta import scheduler
+os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"  # or ":16:8"
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-# aggiunta import ContrastLoss
 from .ContrastLoss import ContrastLoss
 
 import torch
@@ -21,6 +17,11 @@ from torch_sparse import SparseTensor
 
 
 class RoGERModel(torch.nn.Module, ABC):
+    """
+    RoGERModel implements the core graph neural network for the RoGER recommender.
+    It supports GCN, GAT, and dense aggregation, and includes contrastive loss.
+    """
+
     def __init__(
         self,
         num_users,
@@ -44,7 +45,7 @@ class RoGERModel(torch.nn.Module, ABC):
     ):
         super().__init__()
 
-        # set seed
+        # set seed for reproducibility
         random.seed(random_seed)
         np.random.seed(random_seed)
         torch.manual_seed(random_seed)
@@ -55,6 +56,7 @@ class RoGERModel(torch.nn.Module, ABC):
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+        # Model hyperparameters
         self.num_users = num_users
         self.num_items = num_items
         self.embed_k = embed_k
@@ -93,14 +95,13 @@ class RoGERModel(torch.nn.Module, ABC):
         self.factor = factor
         self.patience = patience
 
-        # modifica aggiunta squeeze()
         self.edge_embeddings_interactions = torch.tensor(
             edge_features, dtype=torch.float32, device=self.device
         ).squeeze()
-        # modifica shape[2] invece di shape[1]
+
         self.feature_dim = edge_features.shape[2]
 
-        # create node-node textual
+        # Build GCN layers for message passing
         propagation_node_node_textual_list = []
         for _ in range(self.n_layers):
             propagation_node_node_textual_list.append(
@@ -121,6 +122,7 @@ class RoGERModel(torch.nn.Module, ABC):
         )
         self.node_node_textual_network.to(self.device)
 
+        # Aggregation type: 'sim', 'nn', or 'att'
         if self.aggr == "sim":
             # projection
             self.projection = torch.nn.Linear(
@@ -169,21 +171,22 @@ class RoGERModel(torch.nn.Module, ABC):
             )
             self.attention.to(self.device)
 
+        # Optimizer and scheduler
         self.optimizer = torch.optim.Adam(self.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
 
-        # modifica aggiunta scheduler lr
-        # mode='min' perché monitoriamo MSE (vogliamo minimizzarlo)
-        # factor=0.1 riduce LR a LR * 0.1
-        # patience=5 attende 5 epoche senza miglioramenti prima di ridurre LR
-        # verbose=True stampa un messaggio quando LR viene ridotto
         self.scheduler = ReduceLROnPlateau(
             self.optimizer, mode="min", factor=self.factor, patience=self.patience
         )
 
+        # Loss functions
         self.mse_loss = torch.nn.MSELoss()
         self.contrast_loss = ContrastLoss(feat_size=self.embed_k).to(self.device)
 
     def propagate_embeddings(self, mask_user=None, mask_item=None, evaluate=False):
+        """
+        Propagate node embeddings through GCN layers.
+        If evaluate=True, disables dropout and uses all edges.
+        """
         all_embeddings = torch.cat(
             (self.Gu.to(self.device), self.Gi.to(self.device)), 0
         )
@@ -233,6 +236,9 @@ class RoGERModel(torch.nn.Module, ABC):
         return gu, gi
 
     def edge_index_to_adj(self, edge_index):
+        """
+        Convert edge index and weights to a SparseTensor adjacency matrix.
+        """
         rows = edge_index[0].long().to(self.device)
         cols = edge_index[1].long().to(self.device)
         values = edge_index[2].float().to(self.device)
@@ -248,6 +254,9 @@ class RoGERModel(torch.nn.Module, ABC):
         )
 
     def update_adjacency(self, node_embeddings, mask_user=None, mask_item=None, evaluate=False):
+        """
+        Update edge weights using the selected aggregation method.
+        """
         if evaluate==False:
             edge_embeddings_interactions = self.edge_embeddings_interactions[mask_user & mask_item, :]
             row, col = self.edge_index[:, np.concatenate((mask_user,mask_item)) & np.concatenate((mask_item, mask_user))]
@@ -287,7 +296,7 @@ class RoGERModel(torch.nn.Module, ABC):
             updates = torch.concat([user_item, user_item], dim=0)
             return updates
 
-        else:
+        else:   # 'att'
             edge_index = self.edge_index[:, : self.edge_index.shape[1] // 2].clone()
             edge_index = edge_index[:, mask_user & mask_item]
             edge_index = torch.concat(
@@ -307,6 +316,9 @@ class RoGERModel(torch.nn.Module, ABC):
             return updates
 
     def forward(self, inputs, **kwargs):
+        """
+        Compute predicted scores for user-item pairs.
+        """
         gu, gi, bu, bi = inputs
 
         gamma_u = torch.squeeze(gu).to(self.device)
@@ -322,33 +334,27 @@ class RoGERModel(torch.nn.Module, ABC):
         return xui
 
     def predict(self, gu, gi, users, items, **kwargs):
+        """
+        Predict ratings for given users and items.
+        """
         rui = self.forward(
             inputs=(gu, gi, self.Bu.weight[users], self.Bi.weight[items])
         )
         return rui
 
-    #    def train_step(self, batch):
-    #        gu, gi = self.propagate_embeddings()
-    #        user, item, r = batch
-    #        rui = self.forward(inputs=(gu[user], gi[item],
-    #                        self.Bu.weight[user], self.Bi.weight[item]))
-    #
-    #        loss = self.loss(torch.squeeze(rui), torch.tensor(r, device=self.device, dtype=torch.float))
-    #
-    #        self.optimizer.zero_grad()
-    #        loss.backward()
-    #        self.optimizer.step()
-    #
-    #        return loss.detach().cpu().numpy()
-
-    # modifica train_step con l'aggiunta di una contrastive loss
     def train_step(self, batch, mask):
-        # Create boolean masks full of True values with the same shape as mask[0] and mask[1]
+        """
+        Perform a single training step with contrastive loss.
+        Returns loss and gradient statistics for logging.
+        """
+        # Masks for full graph and two contrastive views
         mask_all_true_user = np.full(mask[0].shape, True, dtype=bool)
         mask_all_true_item = np.full(mask[1].shape, True, dtype=bool)
-        # Pass the all-True masks to propagate_embeddings
+
+        # Full graph embeddings
         gu, gi = self.propagate_embeddings(mask_user=mask_all_true_user, mask_item=mask_all_true_item)
-        #generazione delle due view
+
+        # Contrastive views
         gu1, gi1 = self.propagate_embeddings(mask_user=mask[0], mask_item=mask[1])
         gu2, gi2 = self.propagate_embeddings(mask_user=mask[2], mask_item=mask[3])
         
@@ -357,7 +363,7 @@ class RoGERModel(torch.nn.Module, ABC):
         
         user, item, r = batch
         
-        # calcolo della mse loss per la prima view
+        # MSE loss for main view
         rui = self.forward(
             inputs=(gu[user], gi[item], self.Bu.weight[user], self.Bi.weight[item])
         )
@@ -366,29 +372,25 @@ class RoGERModel(torch.nn.Module, ABC):
             torch.squeeze(rui), torch.tensor(r, device=self.device, dtype=torch.float)
         )
         
-        # calcolo della contrastive loss
+        # Contrastive loss between views
         user_nd_loss = self.contrast_loss(gu1[user], gu2[user]).mean()
         item_nd_loss = self.contrast_loss(gi1[item], gi2[item]).mean()
         nd_loss = (user_nd_loss + item_nd_loss) / 2.0
-        #print(f"\ncontrastive loss: {nd_loss} | mse loss: {mse_loss}\n")
         
         total_loss = mse_loss + self.alpha * nd_loss
 
         self.optimizer.zero_grad()
         total_loss.backward()
 
-        # --- Debug: Calcolo della norma L2 dei gradienti per parametro per il batch corrente ---
+        # Debug: Collect gradient norms and weight distributions for logging
         batch_gradient_norms = {}
         batch_weight_distributions = {}
         for name, p in self.named_parameters():
             if p.grad is not None:
                 batch_gradient_norms[name] = p.grad.data.norm(2).item()
             batch_weight_distributions[name] = p.data.detach().cpu().numpy()
-        # --- Fine Debug ---
-
 
         self.optimizer.step()
 
-        # Restituisce la loss e la somma delle magnitudini dei gradienti per questo batch
-        # La media a livello di epoca dovrà essere calcolata nel loop di training esterno
+        # Return loss and statistics for this batch
         return total_loss.detach().cpu().numpy(), batch_gradient_norms, batch_weight_distributions, mse_loss, nd_loss
