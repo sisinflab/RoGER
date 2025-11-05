@@ -21,3 +21,6 @@ for _backend in sys.modules["external"].backend:
         from .roger.RoGER import RoGER
         from .ncf.NCF import NCF
         from .mf.MF import MF
+        from .sage.SAGE import SAGE
+        from .gin.GIN import GIN
+
