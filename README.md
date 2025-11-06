@@ -1,5 +1,3 @@
-# EGCF-Rating
-To access the datasets, visit the following SharePoint link: [Datasets on SharePoint](https://politecnicobari-my.sharepoint.com/:f:/g/personal/claudio_pomo_poliba_it/EheHLjfdlhRIvX4mGr1VnLABE6GAavuyEaje6YV0gF4VJQ?e=ByGVwg)
 # RoGER: Graph-based Recommendation with Review Enrichment
 
 This is the official implementation of our graph-based recommender system, RoGER, which leverages both user-item interaction graphs and textual reviews to enrich recommendations.
@@ -10,7 +8,8 @@ The code is built on top of the [Elliot](https://github.com/sisinflab/elliot) fr
 
 The main model files are:
 
-- RoGER ([external/models/roger/RoGER.py](external/models/roger/RoGER.py), [external/models/roger/RoGERModel.py](external/models/roger/RoGERModel.py), backend: `PyTorch`)
+- [external/models/roger/RoGER.py](external/models/roger/RoGER.py)
+- [external/models/roger/RoGERModel.py](external/models/roger/RoGERModel.py)
 
 ## Installation
 
@@ -20,18 +19,11 @@ We recommend using a Python virtual environment or Conda environment. All depend
 # Using Conda
 conda env create -f rmg_env.yml
 conda activate rmg
-
-# Or using venv and pip
-python -m venv venv
-source venv/bin/activate  # or .\venv\Scripts\activate on Windows
-pip install -r requirements.txt
 ```
-
-For graph-based models, install PyTorch Geometric as described in the [official instructions](https://pytorch-geometric.readthedocs.io/en/latest/notes/installation.html).
 
 ## Datasets
 
-Datasets should be placed in the `data/` folder. Each dataset should include train, validation, and test splits, as well as review-based side information if required.
+Datasets should be placed in the `data/` folder. Each dataset should include train, validation, and test splits, as well as review-based side information.
 
 Example dataset structure:
 ```
@@ -41,8 +33,10 @@ data/
     office_Val_final.tsv
     office_Test_final.tsv
     office_interactions.tsv
-    1/  # review features
+    1/  # review features folder with an .npy file for each train interaction
 ```
+
+To access the datasets, visit the following SharePoint link: [Datasets on SharePoint](https://politecnicobari-my.sharepoint.com/:f:/g/personal/claudio_pomo_poliba_it/EheHLjfdlhRIvX4mGr1VnLABE6GAavuyEaje6YV0gF4VJQ?e=ByGVwg)
 
 ## Configuration
 
@@ -59,10 +53,6 @@ python start_experiments.py --config Office_Products
 ```
 
 This will execute the experiment defined in `config_files/Office_Products.yml`. Results and logs will be saved in the `results/` and `log/` folders.
-
-## Results
-
-After training, results are available in `results/<dataset>/performance/` as TSV files. Each file contains the metrics computed for the experiment.
 
 ## Citation
 
