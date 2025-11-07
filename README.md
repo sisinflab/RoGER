@@ -13,12 +13,11 @@ The main model files are:
 
 ## Installation
 
-We recommend using a Python virtual environment or Conda environment. All dependencies are listed in `requirements.txt` and `rmg_env.yml`.
+We recommend using a Conda environment ([Install Miniconda](https://www.anaconda.com/docs/getting-started/miniconda/install)).
 
 ```sh
-# Using Conda
-conda env create -f rmg_env.yml
-conda activate rmg
+conda env create -f roger_env.yml
+conda activate roger_irp
 ```
 
 ## Datasets
