@@ -3,6 +3,7 @@ import numpy as np
 import torch
 import random
 import pandas as pd
+import os
 from ast import literal_eval as make_tuple
 from torch_geometric.utils import degree
 from torch.utils.tensorboard import SummaryWriter
@@ -184,9 +185,11 @@ class RoGER(RecMixin, BaseRecommenderModel):
                     bi_values,
                     (n_users, n_items)
                 )
-
+                #controlla che la cartella esista altrimenti la crea
+                if not os.path.exists(f"./adj/{self._config.dataset}"):
+                    os.makedirs(f"./adj/{self._config.dataset}")
                 # Salva la matrice
-                torch.save(bi_adj, f"./adj/office/bi_adj_epoch_{it}.pt")
+                torch.save(bi_adj, f"./adj/{self._config.dataset}/bi_adj_epoch_{it}.pt")
 
             loss = 0
             steps = 0

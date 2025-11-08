@@ -4,7 +4,7 @@ import torch
 import os
 
 from elliot.utils.write import store_recommendation
-from pointwise_pos_neg_sampler import *
+from .pointwise_pos_neg_sampler import *
 from elliot.recommender import BaseRecommenderModel
 from elliot.recommender.base_recommender_model import init_charger
 from elliot.recommender.recommender_utils_mixin import RecMixin
