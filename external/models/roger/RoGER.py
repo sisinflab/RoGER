@@ -39,7 +39,8 @@ class RoGER(RecMixin, BaseRecommenderModel):
             ("_factor", "factor", "fct", 0.1, float, None),
             ("_patience", "patience", "ptn", 0, int, None),
             ("_node_dropout", "node_dropout", "nd", 0.1, float, None),
-            ("_weight_decay", "weight_decay", "wd", 1e-4, float, None)
+            ("_weight_decay", "weight_decay", "wd", 1e-4, float, None),
+            ("_save_adj", "save_adj", "s_adj", False, bool, None)
         ]
         self.autoset_params()
 
@@ -107,7 +108,8 @@ class RoGER(RecMixin, BaseRecommenderModel):
             alpha=self._alpha,
             factor=self._factor,
             patience=self._patience,
-            weight_decay=self._weight_decay
+            weight_decay=self._weight_decay,
+            save_adj=self._save_adj
         )
 
     @property
@@ -133,6 +135,38 @@ class RoGER(RecMixin, BaseRecommenderModel):
         edge_index = np.array([row, col, ratings]).transpose()
 
         for it in self.iterate(self._epochs):
+            if (it % 2 == 0)and(self._save_adj==True):
+                gu, gi = self._model.propagate_embeddings(evaluate=True)
+                all_embeddings = torch.cat((gu, gi), 0)
+                updates = self._model.update_adjacency(all_embeddings, evaluate=True)
+                final_values = self._model.lm * self._model.L0 + (1 - self._model.lm) * updates
+                edge_index_full = torch.stack(
+                    [self._model.edge_index[0], self._model.edge_index[1], final_values], dim=0
+                )
+                adj = self._model.edge_index_to_adj(edge_index_full)
+                adj = adj.coalesce()
+                n_users = self._num_users
+                n_items = self._num_items
+
+                # Estrai solo gli archi da utenti (righe 0:n_users) a item (colonne n_users:n_users+n_items)
+                row, col, values = adj.coo()
+
+                # Mask: solo righe utenti e colonne item
+                mask = (row < n_users) & (col >= n_users) & (col < n_users + n_items)
+                user_idx = row[mask]
+                item_idx = col[mask] - n_users  # shift per portare le colonne da [n_users, n_users+n_items) a [0, n_items)
+                bi_values = values[mask]
+
+                # Crea la matrice sparsa bi-adiacenza n_users x n_items
+                bi_adj = torch.sparse_coo_tensor(
+                    torch.stack([user_idx, item_idx], dim=0),
+                    bi_values,
+                    (n_users, n_items)
+                )
+
+                # Salva la matrice
+                torch.save(bi_adj, f"./adj/office/bi_adj_epoch_{it}.pt")
+
             loss = 0
             steps = 0
             grad_norm = 0

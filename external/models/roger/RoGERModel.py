@@ -39,6 +39,7 @@ class RoGERModel(torch.nn.Module, ABC):
         factor,
         patience,
         weight_decay,
+        save_adj,
         name="RoGER",
         **kwargs
     ):
@@ -61,6 +62,7 @@ class RoGERModel(torch.nn.Module, ABC):
         self.learning_rate = learning_rate
         self.n_layers = n_layers
         self.weight_decay = weight_decay
+        self.save_adj = save_adj
 
         self.L0 = torch.ones(
             (edge_index.shape[1],), dtype=torch.float32, device=self.device
