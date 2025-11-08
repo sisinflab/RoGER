@@ -1,0 +1,50 @@
+experiment:
+  backend: [pytorch]
+  data_config:
+    strategy: fixed
+    train_path: ../data/{0}/office_Train_final.tsv
+    validation_path: ../data/{0}/office_Val_final.tsv
+    test_path: ../data/{0}/office_Test_final.tsv
+    side_information:
+      - dataloader: InteractionsTextualAttributes
+        interactions_features: ../data/{0}/1/
+        interactions: ../data/{0}/office_interactions.tsv
+  dataset: Office_Products
+  top_k: 20
+  evaluation:
+    cutoffs: [0]
+    simple_metrics: [Recall, MSE, AUC]
+  gpu: 0
+  external_models_path: ../external/models/__init__.py
+  models:
+    external.RoGER:
+      meta:
+        hyper_max_evals: 20
+        hyper_opt_alg: tpe
+        verbose: True
+        save_weights: False
+        save_recs: False
+        validation_rate: 1
+        validation_metric: MSE
+        restore: False
+      epochs: 50
+      batch_size: 128
+      n_layers: [choice, [1, 2, 3, 4]]
+      emb: 16
+      lr: [loguniform, -9.2, -4.6]
+      seed: 123
+      lambda: [quniform, 0.0, 1.0, 1e-1]
+      drop: [quniform, 0.0, 1.0, 1e-1]
+      dense: (32,16,8)
+      aggr: [choice, [nn, att, sim]]
+      alpha: [quniform, 0.01, 0.5, 0.01]
+      factor: 0.1
+      patience: 2
+      nd: 0.1
+      weight_decay: [qloguniform, -13.8, -4.6, 1e-5]
+      early_stopping:
+        patience: 5
+        mode: min
+        monitor: MSE
+        verbose: True
+        min_delta: 0.0001

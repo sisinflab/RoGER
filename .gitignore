@@ -4,3 +4,4 @@ log/
 results
 *.pyc
 __pycache__/
+output.log

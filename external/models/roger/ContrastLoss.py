@@ -6,31 +6,31 @@ import torch.nn.init as init
 
 class ContrastLoss(nn.Module, ABC):
     """
-    Contrastive Loss per confrontare embedding positivi e negativi.
+    Contrastive Loss for comparing positive and negative embeddings.
     """
     def __init__(self, feat_size):
         super(ContrastLoss, self).__init__()
-        # Matrice di pesi per la similarità bilineare
+        # Weight matrix for bilinear similarity
         self.w = nn.Parameter(torch.Tensor(feat_size, feat_size))
         init.xavier_uniform_(self.w.data)
-        # Loss Binary Cross-Entropy con Logits
+        # Binary Cross-Entropy Loss with Logits
         self.bce_loss = nn.BCEWithLogitsLoss(reduction='mean') # Usiamo 'mean' per ottenere una loss scalare
 
     def forward(self, x, y, y_neg=None):
         """
-        :param x: bs * dim
-        :param y: bs * dim
-        :param y_neg: bs * dim
-        :return:
+        Args:
+            x (Tensor): Batch of embeddings (bs x dim).
+            y (Tensor): Batch of positive embeddings (bs x dim).
+            y_neg (Tensor, optional): Batch of negative embeddings (bs x dim).
+        Returns:
+            Tensor: Scalar contrastive loss.
         """
-
-        # positive
-        #  scores = self.bilinear(x, y).squeeze()
+        # Positive pairs
         scores = (x @ self.w * y ).sum(1)
         labels = scores.new_ones(scores.shape)
         pos_loss = self.bce_loss(scores, labels)
 
-        #  neg2_scores = self.bilinear(x, y_neg).squeeze()
+        # Negative pairs
         if y_neg is None:
             idx = torch.randperm(y.shape[0])
             y_neg = y[idx, :]
