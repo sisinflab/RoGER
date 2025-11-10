@@ -51,6 +51,17 @@ class SimGCLModel(torch.nn.Module, ABC):
         self.Gu = torch.nn.Parameter(initializer(torch.empty(self.num_users, self.embed_k)))
         self.Gi = torch.nn.Parameter(initializer(torch.empty(self.num_items, self.embed_k)))
 
+        self.Bu = torch.nn.Embedding(self.num_users, 1)
+        torch.nn.init.xavier_normal_(self.Bu.weight)
+        self.Bu.to(self.device)
+        self.Bi = torch.nn.Embedding(self.num_items, 1)
+        torch.nn.init.xavier_normal_(self.Bi.weight)
+        self.Bi.to(self.device)
+ 
+        self.Mu = torch.nn.Parameter(
+            torch.nn.init.xavier_normal_(torch.empty((1, 1))))
+        self.Mu.to(self.device)
+
         propagation_network_list = []
 
         for _ in range(self.n_layers):
@@ -79,9 +90,12 @@ class SimGCLModel(torch.nn.Module, ABC):
         user_all_embeddings, item_all_embeddings = torch.split(all_embeddings, [self.num_users, self.num_items])
         return user_all_embeddings, item_all_embeddings
 
-    def predict(self, gu, gi, **kwargs):
-        return torch.matmul(gu.to(self.device),
-                            torch.transpose(gi.to(self.device), 0, 1))
+    #def predict(self, gu, gi, **kwargs):
+    #    return torch.matmul(gu.to(self.device),
+    #                        torch.transpose(gi.to(self.device), 0, 1))
+    
+    def predict(self, gu, gi, users, items, **kwargs):
+        return self.forward(inputs=(gu, gi, self.Bu.weight[users], self.Bi.weight[items]))
 
     def cal_cl_loss(self, idx):
         u_idx = torch.unique(torch.Tensor(idx[0]).type(torch.long)).to(self.device)
@@ -110,10 +124,24 @@ class SimGCLModel(torch.nn.Module, ABC):
         score = torch.diag(torch.nn.functional.log_softmax(pos_score, dim=1))
         return -score.mean()
 
-    @staticmethod
-    def forward(user_emb, item_emb):
-        score = torch.mul(user_emb, item_emb).sum(dim=1)
-        return score
+    #@staticmethod
+    #def forward(user_emb, item_emb):
+    #    score = torch.mul(user_emb, item_emb).sum(dim=1)
+    #    return score
+
+    def forward(self, inputs, **kwargs):
+        gu, gi, bu, bi, = inputs
+        gamma_u = torch.squeeze(gu).to(self.device)
+        gamma_i = torch.squeeze(gi).to(self.device)
+ 
+        beta_u = torch.squeeze(bu).to(self.device)
+        beta_i = torch.squeeze(bi).to(self.device)
+ 
+        mu = torch.squeeze(self.Mu).to(self.device)
+ 
+        xui = torch.sum(gamma_u * gamma_i, 1) + beta_u + beta_i + mu
+ 
+        return xui
 
     @staticmethod
     def l2_reg_loss(reg, *args):
@@ -126,7 +154,8 @@ class SimGCLModel(torch.nn.Module, ABC):
         gu, gi = self.propagate_embeddings()
         user, item, r = batch
         user_emb, item_emb = gu[user], gi[item]
-        rui = self.forward(user_emb, item_emb)
+        #rui = self.forward(user_emb, item_emb)
+        rui = self.forward(inputs=(gu[user], gi[item], self.Bu.weight[user], self.Bi.weight[item]))
         rec_loss = self.loss(torch.squeeze(rui), torch.tensor(r, device=self.device, dtype=torch.float))
         cl_loss = self.reg_cl * self.cal_cl_loss([user, item_emb])
         batch_loss = rec_loss + self.l2_reg_loss(self.l_w, user_emb, item_emb) + cl_loss

@@ -170,7 +170,10 @@ class SimGCL(RecMixin, BaseRecommenderModel):
             for index, offset in enumerate(range(0, val_len, self._batch_eval)):
                 offset_stop = min(offset + self._batch_eval, val_len)
                 current_df = self.df_val_rat[offset:offset_stop]
-                p = self._model.predict(gu[current_df['user'].tolist()], gi[current_df['item'].tolist()])
+                #p = self._model.predict(gu[current_df['user'].tolist()], gi[current_df['item'].tolist()])
+                p = self._model.predict(gu[current_df['user'].tolist()], gi[current_df['item'].tolist()],
+                                        current_df['user'].tolist(), current_df['item'].tolist())
+                #p = p.view(-1)
                 predictions_val += p.detach().cpu().numpy().tolist()
                 t.update()
         test_len = len(self.df_test_rat)
@@ -178,7 +181,10 @@ class SimGCL(RecMixin, BaseRecommenderModel):
             for index, offset in enumerate(range(0, test_len, self._batch_eval)):
                 offset_stop = min(offset + self._batch_eval, test_len)
                 current_df = self.df_test_rat[offset:offset_stop]
-                p = self._model.predict(gu[current_df['user'].tolist()], gi[current_df['item'].tolist()])
+                #p = self._model.predict(gu[current_df['user'].tolist()], gi[current_df['item'].tolist()])
+                p = self._model.predict(gu[current_df['user'].tolist()], gi[current_df['item'].tolist()],
+                                        current_df['user'].tolist(), current_df['item'].tolist())
+                #p = p.view(-1)
                 predictions_test += p.detach().cpu().numpy().tolist()
                 t.update()
         return predictions_val, predictions_test
@@ -192,7 +198,11 @@ class SimGCL(RecMixin, BaseRecommenderModel):
     def evaluate(self, it=None, loss=0):
         if (it is None) or (not (it + 1) % self._validation_rate):
             recs = self.get_recommendations(self.evaluator.get_needed_recommendations())
-            result_dict = self.evaluator.eval(recs)
+            #result_dict = self.evaluator.eval(recs)
+            predictions_val, predictions_test = self.get_recommendations()
+            true_val, true_test = self.df_val_rat['rating'].to_numpy(), self.df_test_rat['rating'].to_numpy()
+            result_dict = self.evaluator.eval_error(np.array(predictions_val), true_val, np.array(predictions_test),
+                                                    true_test)
 
             self._losses.append(loss)
 
