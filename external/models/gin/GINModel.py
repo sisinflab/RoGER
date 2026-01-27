@@ -77,7 +77,7 @@ class GINModel(torch.nn.Module, ABC):
 
         propagation_network_list = []
 
-        for layer in range(self.num_layers):
+        for layer in range(self.n_layers):
             nn_list = []
             for layer_nn in range(self.nn_num_layers):
                 nn_list.append(
