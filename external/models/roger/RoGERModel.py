@@ -41,6 +41,8 @@ class RoGERModel(torch.nn.Module, ABC):
         patience,
         weight_decay,
         save_adj,
+        eta,
+        threshold,
         name="RoGER",
         **kwargs
     ):
@@ -65,10 +67,15 @@ class RoGERModel(torch.nn.Module, ABC):
         self.n_layers = n_layers
         self.weight_decay = weight_decay
         self.save_adj = save_adj
+        self.eta = eta
+        self.threshold = threshold
 
-        self.L0 = torch.ones(
-            (edge_index.shape[1],), dtype=torch.float32, device=self.device
+        self.L0 = self.compute_normalized_edge_weights(
+            edge_index, self.num_users + self.num_items
         )
+        #self.L0 = torch.ones(
+        #    (edge_index.shape[1],), dtype=torch.float32, device=self.device
+        #)
         self.edge_index = edge_index.to(self.device)
 
         self.Gu = torch.nn.Parameter(
@@ -184,6 +191,33 @@ class RoGERModel(torch.nn.Module, ABC):
         self.mse_loss = torch.nn.MSELoss()
         self.contrast_loss = ContrastLoss(feat_size=self.embed_k).to(self.device)
 
+    def compute_normalized_edge_weights(self, edge_index, num_nodes):
+        values = torch.ones(edge_index.shape[1], dtype=torch.float32, device=self.device)
+        edge_index = edge_index.to(self.device)
+        row = edge_index[0].to(dtype=torch.long, device=self.device)
+        col = edge_index[1].to(dtype=torch.long, device=self.device)
+        adj = SparseTensor(row=row, col=col, value=values, sparse_sizes=(num_nodes, num_nodes))
+        deg = adj.sum(dim=1).to(torch.float32)
+        deg_inv_sqrt = deg.pow(-0.5)
+        deg_inv_sqrt[deg_inv_sqrt == float('inf')] = 0
+        row, col = edge_index[0], edge_index[1]
+        norm_values = deg_inv_sqrt[row] * values * deg_inv_sqrt[col]
+        return norm_values
+
+    def row_normalize(self, A, edge_index, num_nodes):
+        """
+        Normalizza i pesi degli archi per riga (nodo sorgente).
+        A: vettore dei pesi degli archi (shape: [num_edges])
+        edge_index: shape [2, num_edges]
+        num_nodes: numero totale di nodi
+        """
+        row = edge_index[0].to(dtype=torch.long, device=self.device)
+        # Calcola la somma dei pesi per ogni nodo sorgente
+        row_sum = torch.zeros(num_nodes, device=self.device).scatter_add_(0, row, A)
+        # Evita divisione per zero
+        norm = A / (row_sum[row] + 1e-8)
+        return norm
+
     def propagate_embeddings(self, mask_user=None, mask_item=None, evaluate=False):
         """
         Propagate node embeddings through GCN layers.
@@ -198,9 +232,21 @@ class RoGERModel(torch.nn.Module, ABC):
                     self.dense_network.eval()
                 with torch.no_grad():
                     updates = self.update_adjacency(all_embeddings, evaluate=evaluate)
+                    # Salva A^{(1)} se non esiste
+                    if not hasattr(self, "A1"):
+                        self.A1 = updates.clone().detach()
+                    # Normalizza
+                    f_At = self.row_normalize(updates, self.edge_index, self.num_users + self.num_items)
+                    #if not hasattr(self, "f_A1"):
+                    self.f_A1 = self.row_normalize(self.A1, self.edge_index, self.num_users + self.num_items)
+                    # Formula (3)
                     final_values = (
-                        self.lm * self.L0.to(self.device) + (1 - self.lm) * updates
+                            self.lm * self.L0.to(self.device)
+                            + (1 - self.lm) * (self.eta * f_At + (1 - self.eta) * self.f_A1)
                     )
+                    #final_values = (
+                    #    self.lm * self.L0.to(self.device) + (1 - self.lm) * updates
+                    #)
                     edge_index = torch.stack(
                         [self.edge_index[0], self.edge_index[1], final_values], dim=0
                     )
@@ -212,10 +258,21 @@ class RoGERModel(torch.nn.Module, ABC):
                     )
             else:
                 updates = self.update_adjacency(all_embeddings, mask_user, mask_item)
+                edge_index_dropout = self.edge_index[:, np.concatenate([mask_user, mask_item]) & np.concatenate([mask_item, mask_user])]
+                if not hasattr(self, "A1"):
+                    self.A1 = updates.clone().detach()
+                f_At = self.row_normalize(updates, edge_index_dropout, self.num_users + self.num_items)
+                #if not hasattr(self, "f_A1"):
+                self.f_A1 = self.row_normalize(self.A1[np.concatenate([mask_user, mask_item]) & np.concatenate([mask_item, mask_user])], edge_index_dropout, self.num_users + self.num_items)
                 final_values = (
-                    self.lm * self.L0[np.concatenate((mask_user,mask_item)) & np.concatenate((mask_item, mask_user))].to(self.device) + (1 - self.lm) * updates
+                        self.lm * self.L0[
+                    np.concatenate((mask_user, mask_item)) & np.concatenate((mask_item, mask_user))].to(self.device)
+                        + (1 - self.lm) * (self.eta * f_At + (1 - self.eta) * self.f_A1)
                 )
-                final_values = (final_values >= 0.7).int()
+                #final_values = (
+                #    self.lm * self.L0[np.concatenate((mask_user,mask_item)) & np.concatenate((mask_item, mask_user))].to(self.device) + (1 - self.lm) * updates
+                #)
+                final_values = (final_values >= self.threshold).int()
                 edge_index = torch.stack(
                     [self.edge_index[0, np.concatenate((mask_user,mask_item)) & np.concatenate((mask_item, mask_user))], self.edge_index[1, np.concatenate((mask_user,mask_item)) & np.concatenate((mask_item, mask_user))], final_values], dim=0
                 )

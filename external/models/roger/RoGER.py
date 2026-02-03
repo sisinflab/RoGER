@@ -32,20 +32,22 @@ class RoGER(RecMixin, BaseRecommenderModel):
         self._params_list = [
             ("_lr", "lr", "lr", 0.0005, float, None),
             ("_emb", "emb", "emb", 64, int, None),
-            ("_batch_eval", "batch_eval", "bch_ev", 512, int, None),
-            ("_n_layers", "n_layers", "n_ly", 3, int, None),
+            ("_batch_eval", "batch_eval", "bev", 512, int, None),
+            ("_n_layers", "n_layers", "nly", 3, int, None),
             ("_lambda", "lambda", "lmd", 0.1, float, None),
             ("_drop", "drop", "drop", 0.1, float, None),
-            ("_aggr", "aggr", "aggr", 'sim', str, None),
-            ("_dense", "dense", "dense", "(32,16,8)", lambda x: list(make_tuple(x)),
+            ("_aggr", "aggr", "agg", 'sim', str, None),
+            ("_dense", "dense", "den", "(32,16,8)", lambda x: list(make_tuple(x)),
              lambda x: self._batch_remove(str(x), " []").replace(",", "-")),
-            ("_loader", "loader", "load", 'InteractionsTextualAttributes', str, None),
+            ("_loader", "loader", "ld", 'InteractionsTextualAttributes', str, None),
             ("_alpha", "alpha", "nda", 0.01, float, None),
             ("_factor", "factor", "fct", 0.1, float, None),
             ("_patience", "patience", "ptn", 0, int, None),
             ("_node_dropout", "node_dropout", "nd", 0.1, float, None),
             ("_weight_decay", "weight_decay", "wd", 1e-4, float, None),
-            ("_save_adj", "save_adj", "s_adj", False, bool, None)
+            ("_save_adj", "save_adj", "sadj", False, bool, None),
+            ("_eta", "eta", "et", 0.1, float, None),
+            ("_threshold", "threshold", "th", 0.7, float, None)
         ]
         self.autoset_params()
 
@@ -121,7 +123,9 @@ class RoGER(RecMixin, BaseRecommenderModel):
             factor=self._factor,
             patience=self._patience,
             weight_decay=self._weight_decay,
-            save_adj=self._save_adj
+            save_adj=self._save_adj,
+            eta=self._eta,
+            threshold=self._threshold
         )
 
     @property
@@ -161,7 +165,18 @@ class RoGER(RecMixin, BaseRecommenderModel):
                 gu, gi = self._model.propagate_embeddings(evaluate=True)
                 all_embeddings = torch.cat((gu, gi), 0)
                 updates = self._model.update_adjacency(all_embeddings, evaluate=True)
-                final_values = self._model.lm * self._model.L0 + (1 - self._model.lm) * updates
+                # Salva A^{(1)} se non esiste
+                if not hasattr(self._model, "A1"):
+                    self._model.A1 = updates.clone().detach()
+                # Normalizza
+                f_At = self._model.row_normalize(updates, edge_index, self._model.num_users + self._model.num_items)
+                #if not hasattr(self, "f_A1"):
+                self._model.f_A1 = self._model.row_normalize(self._model.A1, edge_index, self._model.num_users + self._model.num_items)
+                final_values = (
+                        self._model.lm * self._model.L0.to(self._model.device)
+                        + (1 - self._model.lm) * (self._model.eta * f_At + (1 - self._model.eta) * self._model.f_A1)
+                )
+                #final_values = self._model.lm * self._model.L0 + (1 - self._model.lm) * updates
                 edge_index_full = torch.stack(
                     [self._model.edge_index[0], self._model.edge_index[1], final_values], dim=0
                 )
