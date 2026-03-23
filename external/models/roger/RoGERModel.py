@@ -76,7 +76,7 @@ class RoGERModel(torch.nn.Module, ABC):
         #self.L0 = torch.ones(
         #    (edge_index.shape[1],), dtype=torch.float32, device=self.device
         #)
-        self.edge_index = edge_index.to(self.device)
+        self.edge_index = edge_index.to(dtype=torch.long).to(self.device)
 
         self.Gu = torch.nn.Parameter(
             torch.nn.init.xavier_uniform_(torch.empty((self.num_users, self.embed_k)))
@@ -122,12 +122,12 @@ class RoGERModel(torch.nn.Module, ABC):
                         add_self_loops=False,
                         bias=True,
                     ),
-                    "x, edge_index -> x",
+                    "x, edge_index, edge_weight -> x",
                 )
             )
 
         self.node_node_textual_network = torch_geometric.nn.Sequential(
-            "x, edge_index", propagation_node_node_textual_list
+            "x, edge_index, edge_weight", propagation_node_node_textual_list
         )
         self.node_node_textual_network.to(self.device)
 
@@ -226,56 +226,25 @@ class RoGERModel(torch.nn.Module, ABC):
         all_embeddings = torch.cat(
             (self.Gu.to(self.device), self.Gi.to(self.device)), 0
         )
+
+        current_edge_index = self.edge_index[:2].long()
+        if self.edge_index.shape[0] == 3:
+            current_edge_weight = self.edge_index[2].float()
+        else:
+            current_edge_weight = None
+
         for layer in range(self.n_layers):
             if evaluate:
-                if self.aggr == "nn":
-                    self.dense_network.eval()
                 with torch.no_grad():
-                    updates = self.update_adjacency(all_embeddings, evaluate=evaluate)
-                    # Salva A^{(1)} se non esiste
-                    if not hasattr(self, "A1"):
-                        self.A1 = updates.clone().detach()
-                    # Normalizza
-                    f_At = self.row_normalize(updates, self.edge_index, self.num_users + self.num_items)
-                    #if not hasattr(self, "f_A1"):
-                    self.f_A1 = self.row_normalize(self.A1, self.edge_index, self.num_users + self.num_items)
-                    # Formula (3)
-                    final_values = (
-                            self.lm * self.L0.to(self.device)
-                            + (1 - self.lm) * (self.eta * f_At + (1 - self.eta) * self.f_A1)
-                    )
-                    #final_values = (
-                    #    self.lm * self.L0.to(self.device) + (1 - self.lm) * updates
-                    #)
-                    edge_index = torch.stack(
-                        [self.edge_index[0], self.edge_index[1], final_values], dim=0
-                    )
                     all_embeddings = torch.relu(
                         list(self.node_node_textual_network.children())[layer](
                             all_embeddings.to(self.device),
-                            self.edge_index_to_adj(edge_index).to(self.device),
+                            edge_index=current_edge_index,
+                            edge_weight=current_edge_weight
                         )
                     )
             else:
-                updates = self.update_adjacency(all_embeddings, mask_user, mask_item)
-                edge_index_dropout = self.edge_index[:, np.concatenate([mask_user, mask_item]) & np.concatenate([mask_item, mask_user])]
-                if not hasattr(self, "A1"):
-                    self.A1 = updates.clone().detach()
-                f_At = self.row_normalize(updates, edge_index_dropout, self.num_users + self.num_items)
-                #if not hasattr(self, "f_A1"):
-                self.f_A1 = self.row_normalize(self.A1[np.concatenate([mask_user, mask_item]) & np.concatenate([mask_item, mask_user])], edge_index_dropout, self.num_users + self.num_items)
-                final_values = (
-                        self.lm * self.L0[
-                    np.concatenate((mask_user, mask_item)) & np.concatenate((mask_item, mask_user))].to(self.device)
-                        + (1 - self.lm) * (self.eta * f_At + (1 - self.eta) * self.f_A1)
-                )
-                #final_values = (
-                #    self.lm * self.L0[np.concatenate((mask_user,mask_item)) & np.concatenate((mask_item, mask_user))].to(self.device) + (1 - self.lm) * updates
-                #)
-                final_values = (final_values >= self.threshold).int()
-                edge_index = torch.stack(
-                    [self.edge_index[0, np.concatenate((mask_user,mask_item)) & np.concatenate((mask_item, mask_user))], self.edge_index[1, np.concatenate((mask_user,mask_item)) & np.concatenate((mask_item, mask_user))], final_values], dim=0
-                )
+                masked_edge_weight = current_edge_weight[torch.cat([mask_user, mask_item]) & torch.cat([mask_item, mask_user])] if current_edge_weight is not None else None
                 all_embeddings = torch.relu(
                     list(self.node_node_textual_network.children())[layer](
                         torch.dropout(
@@ -283,13 +252,10 @@ class RoGERModel(torch.nn.Module, ABC):
                             p=self.drop,
                             train=not evaluate,
                         ),
-                        self.edge_index_to_adj(edge_index).to(self.device),
+                        edge_index=current_edge_index[:,torch.cat([mask_user, mask_item]) & torch.cat([mask_item, mask_user])],
+                        edge_weight=masked_edge_weight
                     )
                 )
-
-        if evaluate:
-            if self.aggr == "nn":
-                self.dense_network.train()
 
         gu, gi = torch.split(all_embeddings, [self.num_users, self.num_items], 0)
         return gu, gi
@@ -312,31 +278,24 @@ class RoGERModel(torch.nn.Module, ABC):
             ),
         )
 
-    def update_adjacency(self, node_embeddings, mask_user=None, mask_item=None, evaluate=False):
+    def update_adjacency(self, node_embeddings):
         """
         Update edge weights using the selected aggregation method.
         """
-        if evaluate==False:
-            edge_embeddings_interactions = self.edge_embeddings_interactions[mask_user & mask_item, :]
-            row, col = self.edge_index[:, np.concatenate((mask_user,mask_item)) & np.concatenate((mask_item, mask_user))]
-        else:
-            edge_embeddings_interactions = self.edge_embeddings_interactions
-            row, col = self.edge_index
-            mask_user = np.full(edge_embeddings_interactions.shape[0], True, dtype=bool)
-            mask_item = np.full(edge_embeddings_interactions.shape[0], True, dtype=bool)
-        
-        row, col = row.long(), col.long()
-        row_nodes = node_embeddings[row[: row.shape[0] // 2]]
-        col_nodes = node_embeddings[col[: col.shape[0] // 2]]
+        row, col = self.edge_index[:2]
+
+        row, col = row.long().to(self.device), col.long().to(self.device)
+        row_nodes = node_embeddings.to(self.device)[row[: row.shape[0] // 2]]
+        col_nodes = node_embeddings.to(self.device)[col[: col.shape[0] // 2]]
 
         if self.aggr == "sim":
             user_item = torch.relu(
                 torch.nn.functional.cosine_similarity(
                     torch.mul(
-                        row_nodes, self.projection(edge_embeddings_interactions)
+                        row_nodes, self.projection(self.edge_embeddings_interactions)
                     ),
                     torch.mul(
-                        col_nodes, self.projection(edge_embeddings_interactions)
+                        col_nodes, self.projection(self.edge_embeddings_interactions)
                     ),
                 )
             )
@@ -347,7 +306,7 @@ class RoGERModel(torch.nn.Module, ABC):
             user_item = torch.squeeze(
                 self.dense_network(
                     torch.concat(
-                        [row_nodes, edge_embeddings_interactions, col_nodes],
+                        [row_nodes, self.edge_embeddings_interactions, col_nodes],
                         dim=-1,
                     )
                 )
@@ -357,7 +316,6 @@ class RoGERModel(torch.nn.Module, ABC):
 
         else:   # 'att'
             edge_index = self.edge_index[:, : self.edge_index.shape[1] // 2].clone()
-            edge_index = edge_index[:, mask_user & mask_item]
             edge_index = torch.concat(
                 [
                     edge_index.to(self.device),
@@ -367,7 +325,7 @@ class RoGERModel(torch.nn.Module, ABC):
             _, user_item = self.attention(
                 node_embeddings,
                 self.edge_index_to_adj(edge_index),
-                edge_embeddings_interactions,
+                self.edge_embeddings_interactions,
                 return_attention_weights=True,
             )
             user_item = torch.squeeze(user_item.coo()[2])
@@ -407,8 +365,8 @@ class RoGERModel(torch.nn.Module, ABC):
         Returns loss and gradient statistics for logging.
         """
         # Masks for full graph and two contrastive views
-        mask_all_true_user = np.full(mask[0].shape, True, dtype=bool)
-        mask_all_true_item = np.full(mask[1].shape, True, dtype=bool)
+        mask_all_true_user = torch.full(mask[0].shape, True, dtype=bool)
+        mask_all_true_item = torch.full(mask[1].shape, True, dtype=bool)
 
         # Full graph embeddings
         gu, gi = self.propagate_embeddings(mask_user=mask_all_true_user, mask_item=mask_all_true_item)
@@ -442,14 +400,14 @@ class RoGERModel(torch.nn.Module, ABC):
         total_loss.backward()
 
         # Debug: Collect gradient norms and weight distributions for logging
-        batch_gradient_norms = {}
-        batch_weight_distributions = {}
-        for name, p in self.named_parameters():
-            if p.grad is not None:
-                batch_gradient_norms[name] = p.grad.data.norm(2).item()
-            batch_weight_distributions[name] = p.data.detach().cpu().numpy()
+        #batch_gradient_norms = {}
+        #batch_weight_distributions = {}
+        #for name, p in self.named_parameters():
+        #    if p.grad is not None:
+        #        batch_gradient_norms[name] = p.grad.data.norm(2).item()
+        #    batch_weight_distributions[name] = p.data.detach().cpu().numpy()
 
         self.optimizer.step()
 
         # Return loss and statistics for this batch
-        return total_loss.detach().cpu().numpy(), batch_gradient_norms, batch_weight_distributions, mse_loss, nd_loss
+        return total_loss.detach().cpu().numpy(), 0, 0, mse_loss, nd_loss

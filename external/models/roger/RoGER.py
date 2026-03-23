@@ -137,6 +137,7 @@ class RoGER(RecMixin, BaseRecommenderModel):
                + f"_{self.get_base_params_shortcut()}" \
                + f"_{self.get_params_shortcut()}"
 
+    # non viene mai usata
     def norm(self, edge_index):
         """
         Normalize edge weights for GCN propagation.
@@ -148,6 +149,14 @@ class RoGER(RecMixin, BaseRecommenderModel):
         norm = deg_inv_sqrt[row] * deg_inv_sqrt[col]
         return torch.stack([row, col, norm], dim=0)
 
+    def soft_threshold(self, x, k=50):
+        return torch.sigmoid(k * (x - self._threshold))
+
+    def hard_threshold(self, x, k=50):
+        soft = torch.sigmoid(k * (x - self._threshold))
+        hard = (x > self._threshold).float()
+        return hard + soft - soft.detach()
+
     def train(self):
         """
         Main training loop for RoGER.
@@ -158,77 +167,89 @@ class RoGER(RecMixin, BaseRecommenderModel):
 
         row, col = self._data.sp_i_train.nonzero()
         ratings = self._data.sp_i_train_ratings.data
-        edge_index = np.array([row, col, ratings]).transpose()
+        train_dataset = np.array([row, col, ratings]).transpose()
 
         for it in self.iterate(self._epochs):
-            if (it % 2 == 0)and(self._save_adj==True):
-                gu, gi = self._model.propagate_embeddings(evaluate=True)
-                all_embeddings = torch.cat((gu, gi), 0)
-                updates = self._model.update_adjacency(all_embeddings, evaluate=True)
-                # Salva A^{(1)} se non esiste
-                if not hasattr(self._model, "A1"):
-                    self._model.A1 = updates.clone().detach()
-                # Normalizza
-                f_At = self._model.row_normalize(updates, edge_index, self._model.num_users + self._model.num_items)
-                #if not hasattr(self, "f_A1"):
-                self._model.f_A1 = self._model.row_normalize(self._model.A1, edge_index, self._model.num_users + self._model.num_items)
-                final_values = (
-                        self._model.lm * self._model.L0.to(self._model.device)
-                        + (1 - self._model.lm) * (self._model.eta * f_At + (1 - self._model.eta) * self._model.f_A1)
-                )
-                #final_values = self._model.lm * self._model.L0 + (1 - self._model.lm) * updates
-                edge_index_full = torch.stack(
-                    [self._model.edge_index[0], self._model.edge_index[1], final_values], dim=0
-                )
-                adj = self._model.edge_index_to_adj(edge_index_full)
-                adj = adj.coalesce()
-                n_users = self._num_users
-                n_items = self._num_items
+            if (it >= 1):
+                all_embeddings = torch.cat(
+                    (self._model.Gu, self._model.Gi), 0
+                ).to(self._model.device)
 
-                # Estrai solo gli archi da utenti (righe 0:n_users) a item (colonne n_users:n_users+n_items)
-                row, col, values = adj.coo()
+                updates = self._model.update_adjacency(all_embeddings)
 
-                # Mask: solo righe utenti e colonne item
-                mask = (row < n_users) & (col >= n_users) & (col < n_users + n_items)
-                user_idx = row[mask]
-                item_idx = col[mask] - n_users  # shift per portare le colonne da [n_users, n_users+n_items) a [0, n_items)
-                bi_values = values[mask]
+                f_At = self._model.row_normalize(updates, self._model.edge_index, self._model.num_users + self._model.num_items)
 
-                # Crea la matrice sparsa bi-adiacenza n_users x n_items
-                bi_adj = torch.sparse_coo_tensor(
-                    torch.stack([user_idx, item_idx], dim=0),
-                    bi_values,
-                    (n_users, n_items)
+                continuous_weights = (
+                    self._model.lm * self._model.L0.to(self._model.device) + (1 - self._model.lm) * f_At
                 )
-                #controlla che la cartella esista altrimenti la crea
-                if not os.path.exists(f"./adj/{self._config.dataset}"):
-                    os.makedirs(f"./adj/{self._config.dataset}")
-                # Salva la matrice
-                torch.save(bi_adj, f"./adj/{self._config.dataset}/bi_adj_epoch_{it}.pt")
+
+                #final_values = (
+                #   self._model.lm * self._model.L0.to(self._model.device) + (1 - self._model.lm) * f_At
+                #)
+                final_values = self.soft_threshold(continuous_weights)
+                #final_values = (continuous_weights >= self._model.threshold).int()
+
+                self._model.edge_index = torch.stack(
+                    [self._model.edge_index[0],
+                     self._model.edge_index[1],
+                     final_values], dim=0
+                )
+                if (it % 2 == 0)and(self._save_adj==True):
+                    edge_index_export = torch.stack(
+                        [self._model.edge_index[0],
+                         self._model.edge_index[1],
+                         continuous_weights], dim=0
+                    )
+                    adj = self._model.edge_index_to_adj(self._model.edge_index)
+                    adj = adj.coalesce()
+                    n_users = self._num_users
+                    n_items = self._num_items
+
+                    # Estrai solo gli archi da utenti (righe 0:n_users) a item (colonne n_users:n_users+n_items)
+                    row, col, values = adj.coo()
+
+                    # Mask: solo righe utenti e colonne item
+                    mask = (row < n_users) & (col >= n_users) & (col < n_users + n_items)
+                    user_idx = row[mask]
+                    item_idx = col[mask] - n_users  # shift per portare le colonne da [n_users, n_users+n_items) a [0, n_items)
+                    bi_values = values[mask]
+
+                    # Crea la matrice sparsa bi-adiacenza n_users x n_items
+                    bi_adj = torch.sparse_coo_tensor(
+                        torch.stack([user_idx, item_idx], dim=0),
+                        bi_values,
+                        (n_users, n_items)
+                    )
+                    # controlla che la cartella esista altrimenti la crea
+                    if not os.path.exists(f"./adj/{self._config.dataset}"):
+                        os.makedirs(f"./adj/{self._config.dataset}")
+                    # Salva la matrice
+                    torch.save(bi_adj, f"./adj/{self._config.dataset}/bi_adj_epoch_{it}.pt")
 
             loss = 0
             steps = 0
-            grad_norm = 0
+            grad_norm = 0 #?
             mse_loss = 0
             nd_loss = 0
             grad_norm = {}
             weight_distributions = {}
 
-            # Shuffle edge index for each epoch
-            np.random.shuffle(edge_index)
-            edge_index = edge_index.astype(int)
+            # Shuffle train_dataset for each epoch
+            np.random.shuffle(train_dataset)
+            train_dataset = train_dataset.astype(int)
             
             # Create dropout masks for contrastive views
-            mask_user_1, mask_item_1 = self.create_adj_mask(edge_index)
-            mask_user_2, mask_item_2 = self.create_adj_mask(edge_index)
+            mask_user_1, mask_item_1 = self.create_adj_mask(self._model.edge_index)
+            mask_user_2, mask_item_2 = self.create_adj_mask(self._model.edge_index)
 
             with tqdm(total=int(self._data.transactions // self._batch_size), disable=not self._verbose) as t:
-                for batch in self._sampler.step(edge_index):
+                for batch in self._sampler.step(train_dataset):
                     steps += 1
                     # Training step returns loss and gradient statistics
                     loss_t, grad_norm_dict, weight_distributions_dict, mse_loss_t, nd_loss_t = self._model.train_step(batch, mask=[mask_user_1, mask_item_1 , mask_user_2, mask_item_2] )
                     loss += loss_t
                     # Aggregate gradient norms
+                    '''
                     if isinstance(grad_norm_dict, dict):
                         for key, value in grad_norm_dict.items():
                             if key not in grad_norm:
@@ -249,6 +270,7 @@ class RoGER(RecMixin, BaseRecommenderModel):
                         # Example: if grad_norm_dict is a scalar and grad_norm is not a dict (still 0)
                         # elif isinstance(grad_norm_dict, (int, float)) and not isinstance(grad_norm, dict):
                         #    grad_norm += grad_norm_dict
+                    '''
                     mse_loss += mse_loss_t
                     nd_loss += nd_loss_t
                     t.set_postfix({'loss': f'{loss / steps:.5f}'})
@@ -291,8 +313,9 @@ class RoGER(RecMixin, BaseRecommenderModel):
         """
         users_to_drop = random.sample(self._data.users, round(self._data.num_users * self._node_dropout))
         items_to_drop = random.sample(self._data.items, round(self._data.num_items * self._node_dropout))
-        mask_user = ~np.isin(edge_index[:, 0], list(users_to_drop))
-        mask_item = ~np.isin(edge_index[:, 1], list(items_to_drop))
+
+        mask_user = ~torch.isin(edge_index[0, :edge_index.shape[1]//2], torch.tensor(users_to_drop).to(self._model.device))
+        mask_item = ~torch.isin(edge_index[0, :edge_index.shape[1]//2], torch.tensor(items_to_drop).to(self._model.device))
     
         return mask_user, mask_item
 
