@@ -41,7 +41,7 @@ class RoGERModel(torch.nn.Module, ABC):
         patience,
         weight_decay,
         save_adj,
-        eta,
+        tau,
         threshold,
         name="RoGER",
         **kwargs
@@ -67,15 +67,12 @@ class RoGERModel(torch.nn.Module, ABC):
         self.n_layers = n_layers
         self.weight_decay = weight_decay
         self.save_adj = save_adj
-        self.eta = eta
+        self.tau = tau
         self.threshold = threshold
 
         self.L0 = self.compute_normalized_edge_weights(
             edge_index, self.num_users + self.num_items
         )
-        #self.L0 = torch.ones(
-        #    (edge_index.shape[1],), dtype=torch.float32, device=self.device
-        #)
         self.edge_index = edge_index.to(dtype=torch.long).to(self.device)
 
         self.Gu = torch.nn.Parameter(
@@ -189,7 +186,7 @@ class RoGERModel(torch.nn.Module, ABC):
 
         # Loss functions
         self.mse_loss = torch.nn.MSELoss()
-        self.contrast_loss = ContrastLoss(feat_size=self.embed_k).to(self.device)
+        self.contrast_loss = ContrastLoss(feat_size=self.embed_k, tau=self.tau).to(self.device)
 
     def compute_normalized_edge_weights(self, edge_index, num_nodes):
         values = torch.ones(edge_index.shape[1], dtype=torch.float32, device=self.device)
@@ -218,6 +215,9 @@ class RoGERModel(torch.nn.Module, ABC):
         norm = A / (row_sum[row] + 1e-8)
         return norm
 
+    def soft_threshold(self, x, k=5):
+        return torch.sigmoid(k * (x - self.threshold))
+
     def propagate_embeddings(self, mask_user=None, mask_item=None, evaluate=False):
         """
         Propagate node embeddings through GCN layers.
@@ -227,11 +227,8 @@ class RoGERModel(torch.nn.Module, ABC):
             (self.Gu.to(self.device), self.Gi.to(self.device)), 0
         )
 
-        current_edge_index = self.edge_index[:2].long()
-        if self.edge_index.shape[0] == 3:
-            current_edge_weight = self.edge_index[2].float()
-        else:
-            current_edge_weight = None
+        current_edge_index = getattr(self, "current_edge_index", self.edge_index[:2].long())
+        current_edge_weight = getattr(self, "current_edge_weights", None)
 
         for layer in range(self.n_layers):
             if evaluate:
@@ -364,6 +361,23 @@ class RoGERModel(torch.nn.Module, ABC):
         Perform a single training step with contrastive loss.
         Returns loss and gradient statistics for logging.
         """
+        all_embeddings = torch.cat(
+            (self.Gu.to(self.device), self.Gi.to(self.device)), 0
+        )
+
+        updates = self.update_adjacency(all_embeddings)
+
+        f_At = self.row_normalize(updates, self.edge_index, self.num_users + self.num_items)
+
+        continuous_weights = (
+                self.lm * self.L0.to(self.device) + (1 - self.lm) * f_At
+        )
+
+        final_values = self.soft_threshold(continuous_weights)
+
+        self.current_edge_weights = final_values
+        self.current_edge_index = self.edge_index[:2].long()
+
         # Masks for full graph and two contrastive views
         mask_all_true_user = torch.full(mask[0].shape, True, dtype=bool)
         mask_all_true_item = torch.full(mask[1].shape, True, dtype=bool)
@@ -399,15 +413,7 @@ class RoGERModel(torch.nn.Module, ABC):
         self.optimizer.zero_grad()
         total_loss.backward()
 
-        # Debug: Collect gradient norms and weight distributions for logging
-        #batch_gradient_norms = {}
-        #batch_weight_distributions = {}
-        #for name, p in self.named_parameters():
-        #    if p.grad is not None:
-        #        batch_gradient_norms[name] = p.grad.data.norm(2).item()
-        #    batch_weight_distributions[name] = p.data.detach().cpu().numpy()
-
         self.optimizer.step()
 
         # Return loss and statistics for this batch
-        return total_loss.detach().cpu().numpy(), 0, 0, mse_loss, nd_loss
+        return total_loss.detach().cpu().numpy(), mse_loss, nd_loss

@@ -46,7 +46,7 @@ class RoGER(RecMixin, BaseRecommenderModel):
             ("_node_dropout", "node_dropout", "nd", 0.1, float, None),
             ("_weight_decay", "weight_decay", "wd", 1e-4, float, None),
             ("_save_adj", "save_adj", "sadj", False, bool, None),
-            ("_eta", "eta", "et", 0.1, float, None),
+            ("_tau", "tau", "ta", 0.1, float, None),
             ("_threshold", "threshold", "th", 0.7, float, None)
         ]
         self.autoset_params()
@@ -124,7 +124,7 @@ class RoGER(RecMixin, BaseRecommenderModel):
             patience=self._patience,
             weight_decay=self._weight_decay,
             save_adj=self._save_adj,
-            eta=self._eta,
+            tau=self._tau,
             threshold=self._threshold
         )
 
@@ -149,10 +149,10 @@ class RoGER(RecMixin, BaseRecommenderModel):
         norm = deg_inv_sqrt[row] * deg_inv_sqrt[col]
         return torch.stack([row, col, norm], dim=0)
 
-    def soft_threshold(self, x, k=50):
+    def soft_threshold(self, x, k=5):
         return torch.sigmoid(k * (x - self._threshold))
 
-    def hard_threshold(self, x, k=50):
+    def hard_threshold(self, x, k=5):
         soft = torch.sigmoid(k * (x - self._threshold))
         hard = (x > self._threshold).float()
         return hard + soft - soft.detach()
@@ -170,37 +170,21 @@ class RoGER(RecMixin, BaseRecommenderModel):
         train_dataset = np.array([row, col, ratings]).transpose()
 
         for it in self.iterate(self._epochs):
-            if (it >= 1):
-                all_embeddings = torch.cat(
-                    (self._model.Gu, self._model.Gi), 0
-                ).to(self._model.device)
 
-                updates = self._model.update_adjacency(all_embeddings)
+            if (it % 2 == 0)and(it >= 1)and(self._save_adj==True):
+                with torch.no_grad():  # Niente gradienti qui, serve solo per salvare!
+                    all_embeddings = torch.cat((self._model.Gu, self._model.Gi), 0)
+                    updates = self._model.update_adjacency(all_embeddings)
+                    f_At = self._model.row_normalize(updates, self._model.edge_index[:2].long(), self._model.num_users + self._model.num_items)
+                    continuous_weights = self._model.lm * self._model.L0 + (1 - self._model.lm) * f_At
 
-                f_At = self._model.row_normalize(updates, self._model.edge_index, self._model.num_users + self._model.num_items)
-
-                continuous_weights = (
-                    self._model.lm * self._model.L0.to(self._model.device) + (1 - self._model.lm) * f_At
-                )
-
-                #final_values = (
-                #   self._model.lm * self._model.L0.to(self._model.device) + (1 - self._model.lm) * f_At
-                #)
-                final_values = self.soft_threshold(continuous_weights)
-                #final_values = (continuous_weights >= self._model.threshold).int()
-
-                self._model.edge_index = torch.stack(
-                    [self._model.edge_index[0],
-                     self._model.edge_index[1],
-                     final_values], dim=0
-                )
-                if (it % 2 == 0)and(self._save_adj==True):
+                    # Ora esporti continuous_weights come facevi prima!
                     edge_index_export = torch.stack(
                         [self._model.edge_index[0],
                          self._model.edge_index[1],
                          continuous_weights], dim=0
                     )
-                    adj = self._model.edge_index_to_adj(self._model.edge_index)
+                    adj = self._model.edge_index_to_adj(edge_index_export)
                     adj = adj.coalesce()
                     n_users = self._num_users
                     n_items = self._num_items
@@ -228,7 +212,6 @@ class RoGER(RecMixin, BaseRecommenderModel):
 
             loss = 0
             steps = 0
-            grad_norm = 0 #?
             mse_loss = 0
             nd_loss = 0
             grad_norm = {}
@@ -246,40 +229,13 @@ class RoGER(RecMixin, BaseRecommenderModel):
                 for batch in self._sampler.step(train_dataset):
                     steps += 1
                     # Training step returns loss and gradient statistics
-                    loss_t, grad_norm_dict, weight_distributions_dict, mse_loss_t, nd_loss_t = self._model.train_step(batch, mask=[mask_user_1, mask_item_1 , mask_user_2, mask_item_2] )
+                    loss_t, mse_loss_t, nd_loss_t = self._model.train_step(batch, mask=[mask_user_1, mask_item_1 , mask_user_2, mask_item_2] )
                     loss += loss_t
-                    # Aggregate gradient norms
-                    '''
-                    if isinstance(grad_norm_dict, dict):
-                        for key, value in grad_norm_dict.items():
-                            if key not in grad_norm:
-                                grad_norm[key] = np.array([value])
-                            else:
-                                grad_norm[key] = np.append(grad_norm[key],value)
-                    # Aggregate weight distributions
-                    if isinstance(weight_distributions_dict, dict):
-                        for key, value in weight_distributions_dict.items():
-                            if key not in weight_distributions:
-                                weight_distributions[key] = np.array([value])  # Inizializza un nuovo array con il primo valore
-                            else:
-                                weight_distributions[key] = np.append(weight_distributions[key],value)  # Aggiungi il valore all'array esistente
-                    # else:
-                        # Optionally, handle the case where grad_norm_dict is not a dictionary,
-                        # for example, if train_step might return a scalar or None for grad_norm.
-                        # If grad_norm_dict is guaranteed to be a dict, this else is not needed.
-                        # Example: if grad_norm_dict is a scalar and grad_norm is not a dict (still 0)
-                        # elif isinstance(grad_norm_dict, (int, float)) and not isinstance(grad_norm, dict):
-                        #    grad_norm += grad_norm_dict
-                    '''
                     mse_loss += mse_loss_t
                     nd_loss += nd_loss_t
                     t.set_postfix({'loss': f'{loss / steps:.5f}'})
                     t.update()
-                    
-            #if isinstance(grad_norm, dict) and steps > 0:
-            #    for key in grad_norm:
-            #        grad_norm[key] /= steps
-            #self.logger.info(f"Epoch {it + 1}: {grad_norm}")
+
             # Log gradient norms and weight distributions to TensorBoard
             for key, value in grad_norm.items():
                 self.writer.add_histogram(f'GradNorm/{key}', value, it)
@@ -315,7 +271,7 @@ class RoGER(RecMixin, BaseRecommenderModel):
         items_to_drop = random.sample(self._data.items, round(self._data.num_items * self._node_dropout))
 
         mask_user = ~torch.isin(edge_index[0, :edge_index.shape[1]//2], torch.tensor(users_to_drop).to(self._model.device))
-        mask_item = ~torch.isin(edge_index[0, :edge_index.shape[1]//2], torch.tensor(items_to_drop).to(self._model.device))
+        mask_item = ~torch.isin(edge_index[1, :edge_index.shape[1]//2], torch.tensor(items_to_drop).to(self._model.device))
     
         return mask_user, mask_item
 
