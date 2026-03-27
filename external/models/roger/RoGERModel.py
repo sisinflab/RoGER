@@ -257,18 +257,17 @@ class RoGERModel(torch.nn.Module, ABC):
         gu, gi = torch.split(all_embeddings, [self.num_users, self.num_items], 0)
         return gu, gi
 
-    def edge_index_to_adj(self, edge_index):
+    def edge_index_to_adj(self, edge_index, edge_index_weights=None):
         """
         Convert edge index and weights to a SparseTensor adjacency matrix.
         """
         rows = edge_index[0].long().to(self.device)
         cols = edge_index[1].long().to(self.device)
-        values = edge_index[2].float().to(self.device)
 
         return SparseTensor(
             row=rows,
             col=cols,
-            value=values,
+            value=edge_index_weights,
             sparse_sizes=(
                 self.num_users + self.num_items,
                 self.num_users + self.num_items,
@@ -319,9 +318,10 @@ class RoGERModel(torch.nn.Module, ABC):
                     torch.ones((1, edge_index.shape[1]), device=self.device),
                 ]
             )
+            edge_index_weights = getattr(self, "current_edge_weights", None)
             _, user_item = self.attention(
                 node_embeddings,
-                self.edge_index_to_adj(edge_index),
+                self.edge_index_to_adj(edge_index, edge_index_weights),
                 self.edge_embeddings_interactions,
                 return_attention_weights=True,
             )

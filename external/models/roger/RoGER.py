@@ -177,14 +177,10 @@ class RoGER(RecMixin, BaseRecommenderModel):
                     updates = self._model.update_adjacency(all_embeddings)
                     f_At = self._model.row_normalize(updates, self._model.edge_index[:2].long(), self._model.num_users + self._model.num_items)
                     continuous_weights = self._model.lm * self._model.L0 + (1 - self._model.lm) * f_At
+                    final_values = self.soft_threshold(continuous_weights)
 
-                    # Ora esporti continuous_weights come facevi prima!
-                    edge_index_export = torch.stack(
-                        [self._model.edge_index[0],
-                         self._model.edge_index[1],
-                         continuous_weights], dim=0
-                    )
-                    adj = self._model.edge_index_to_adj(edge_index_export)
+                    # Esporto
+                    adj = self._model.edge_index_to_adj(self._model.edge_index, final_values)
                     adj = adj.coalesce()
                     n_users = self._num_users
                     n_items = self._num_items
