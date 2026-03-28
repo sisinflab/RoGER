@@ -173,7 +173,7 @@ class RoGER(RecMixin, BaseRecommenderModel):
 
             if (it % 2 == 0)and(it >= 1)and(self._save_adj==True):
                 with torch.no_grad():  # Niente gradienti qui, serve solo per salvare!
-                    all_embeddings = torch.cat((self._model.Gu, self._model.Gi), 0)
+                    all_embeddings = torch.cat((self._model.Gu.to(self._model.device), self._model.Gi.to(self._model.device)), 0)
                     updates = self._model.update_adjacency(all_embeddings)
                     f_At = self._model.row_normalize(updates, self._model.edge_index[:2].long(), self._model.num_users + self._model.num_items)
                     continuous_weights = self._model.lm * self._model.L0 + (1 - self._model.lm) * f_At

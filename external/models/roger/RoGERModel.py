@@ -311,17 +311,17 @@ class RoGERModel(torch.nn.Module, ABC):
             return updates
 
         else:   # 'att'
-            edge_index = self.edge_index[:, : self.edge_index.shape[1] // 2].clone()
-            edge_index = torch.concat(
-                [
-                    edge_index.to(self.device),
-                    torch.ones((1, edge_index.shape[1]), device=self.device),
-                ]
-            )
-            edge_index_weights = getattr(self, "current_edge_weights", None)
+            edge_index = self.edge_index[:2, : self.edge_index.shape[1] // 2].clone().to(self.device)
+            #edge_index = torch.concat(
+            #    [
+            #        edge_index.to(self.device),
+            #        torch.ones((1, edge_index.shape[1]), device=self.device),
+            #    ]
+            #)
+            edge_weights = torch.ones(edge_index.shape[1], dtype=torch.float32, device=self.device)
             _, user_item = self.attention(
                 node_embeddings,
-                self.edge_index_to_adj(edge_index, edge_index_weights),
+                self.edge_index_to_adj(edge_index, edge_weights),
                 self.edge_embeddings_interactions,
                 return_attention_weights=True,
             )
