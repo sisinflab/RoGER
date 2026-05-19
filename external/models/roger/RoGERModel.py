@@ -6,7 +6,7 @@ import os
 
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"  # or ":16:8"
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from .ContrastLoss import ContrastLoss
+from .ContrastLoss import ContrastLoss, InfoNCELoss
 
 import torch
 import torch_geometric
@@ -186,7 +186,8 @@ class RoGERModel(torch.nn.Module, ABC):
 
         # Loss functions
         self.mse_loss = torch.nn.MSELoss()
-        self.contrast_loss = ContrastLoss(feat_size=self.embed_k, tau=self.tau).to(self.device)
+        #self.contrast_loss = ContrastLoss(feat_size=self.embed_k, tau=self.tau).to(self.device)
+        self.contrast_loss = InfoNCELoss(tau=self.tau).to(self.device)
 
     def compute_normalized_edge_weights(self, edge_index, num_nodes):
         values = torch.ones(edge_index.shape[1], dtype=torch.float32, device=self.device)

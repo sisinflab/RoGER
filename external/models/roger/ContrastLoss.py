@@ -3,6 +3,7 @@ from abc import ABC
 
 import torch.nn as nn
 import torch.nn.init as init
+import torch.nn.functional as F
 
 class ContrastLoss(nn.Module, ABC):
     """
@@ -42,4 +43,26 @@ class ContrastLoss(nn.Module, ABC):
         neg2_loss = self.bce_loss(neg2_scores, neg2_labels)
 
         loss = pos_loss + neg2_loss
+        return loss
+
+
+class InfoNCELoss(nn.Module):
+    def __init__(self, tau):
+        super(InfoNCELoss, self).__init__()
+        self.tau = tau
+
+    def forward(self, view1, view2):
+        """
+        view1, view2: Tensori (batch_size x dim) già normalizzati.
+        """
+        # Calcola la similarità coseno tra tutti gli elementi nel batch
+        # Risultato: matrice (batch_size x batch_size)
+        sim_matrix = torch.matmul(view1, view2.T) / self.tau
+
+        # I positivi si trovano sulla diagonale della matrice
+        labels = torch.arange(view1.size(0)).long().to(view1.device)
+
+        # CrossEntropyLoss applica implicitamente il log-softmax
+        loss = F.cross_entropy(sim_matrix, labels)
+
         return loss
