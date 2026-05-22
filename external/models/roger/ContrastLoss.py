@@ -66,3 +66,48 @@ class InfoNCELoss(nn.Module):
         loss = F.cross_entropy(sim_matrix, labels)
 
         return loss
+
+
+class RatingSupConLoss(nn.Module):
+    """
+    Supervised Contrastive Loss adattata per la Rating Prediction.
+    Usa il valore del rating per determinare le coppie positive reali.
+    """
+
+    def __init__(self, tau=0.1, threshold=4.0):
+        super(RatingSupConLoss, self).__init__()
+        self.tau = tau
+        self.threshold = threshold
+
+    def forward(self, user_emb, item_emb, ratings):
+        """
+        Args:
+            user_emb: Tensore (batch_size x dim)
+            item_emb: Tensore (batch_size x dim)
+            ratings: Tensore (batch_size) con i veri rating (es. da 1 a 5)
+        """
+        # 1. L2 Normalization (fondamentale per la stabilità di InfoNCE/SupCon)
+        user_emb = F.normalize(user_emb, dim=1)
+        item_emb = F.normalize(item_emb, dim=1)
+
+        # 2. Matrice di similarità Tutti-contro-Tutti (batch_size x batch_size)
+        sim_matrix = torch.matmul(user_emb, item_emb.T) / self.tau
+
+        # 3. Log-Softmax sulle colonne (per ogni utente, probabilità su tutti gli item del batch)
+        log_prob = F.log_softmax(sim_matrix, dim=1)
+
+        # 4. Estraiamo i valori sulla diagonale (che corrispondono alle interazioni reali Utente-Item del batch)
+        diag_log_prob = torch.diag(log_prob)
+
+        # 5. La Supervisione: creiamo una maschera binaria basata sul rating
+        # 1.0 se l'utente ha gradito l'item, 0.0 se lo ha detestato (o neutro)
+        pos_mask = (ratings >= self.threshold).float().to(user_emb.device)
+
+        # 6. Calcolo della loss
+        # Massimizziamo la probabilità SOLO per le coppie utente-item con rating alto.
+        # Gli item con rating basso (mask=0) non contribuiscono ad avvicinare i vettori,
+        # ma agiranno comunque come negativi (denominatore del softmax) per gli altri!
+        valid_positives = pos_mask.sum() + 1e-8  # Evita divisioni per zero
+        loss = - (diag_log_prob * pos_mask).sum() / valid_positives
+
+        return loss
