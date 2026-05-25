@@ -6,7 +6,7 @@ import os
 
 os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"  # or ":16:8"
 from torch.optim.lr_scheduler import ReduceLROnPlateau
-from .ContrastLoss import ContrastLoss, InfoNCELoss, RatingSupConLoss
+from .ContrastLoss import ContrastLoss, InfoNCELoss
 
 import torch
 import torch_geometric
@@ -188,7 +188,6 @@ class RoGERModel(torch.nn.Module, ABC):
         self.mse_loss = torch.nn.MSELoss()
         #self.contrast_loss = ContrastLoss(feat_size=self.embed_k, tau=self.tau).to(self.device)
         self.contrast_loss = InfoNCELoss(tau=self.tau).to(self.device)
-        self.supcon_loss = RatingSupConLoss(tau=self.tau, threshold=4.0).to(self.device)
 
     def compute_normalized_edge_weights(self, edge_index, num_nodes):
         values = torch.ones(edge_index.shape[1], dtype=torch.float32, device=self.device)
@@ -395,8 +394,6 @@ class RoGERModel(torch.nn.Module, ABC):
         gu2, gi2 = torch.nn.functional.normalize(gu2, dim=1), torch.nn.functional.normalize(gi2, dim=1)
         
         user, item, r = batch
-
-        ratings_tensor = torch.tensor(r, device=self.device, dtype=torch.float)
         
         # MSE loss for main view
         rui = self.forward(
@@ -408,13 +405,9 @@ class RoGERModel(torch.nn.Module, ABC):
         )
         
         # Contrastive loss between views
-        #user_nd_loss = self.contrast_loss(gu1[user], gu2[user]).mean()
-        #item_nd_loss = self.contrast_loss(gi1[item], gi2[item]).mean()
-        #nd_loss = (user_nd_loss + item_nd_loss) / 2.0
-
-        loss_view_1 = self.supcon_loss(gu1[user], gi1[item], ratings_tensor)
-        loss_view_2 = self.supcon_loss(gu2[user], gi2[item], ratings_tensor)
-        nd_loss = (loss_view_1 + loss_view_2) / 2.0
+        user_nd_loss = self.contrast_loss(gu1[user], gu2[user]).mean()
+        item_nd_loss = self.contrast_loss(gi1[item], gi2[item]).mean()
+        nd_loss = (user_nd_loss + item_nd_loss) / 2.0
         
         total_loss = mse_loss + self.alpha * nd_loss
 
